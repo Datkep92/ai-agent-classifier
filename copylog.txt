@@ -283,3 +283,76 @@ npm start
 6. NEXT RECOMMENDED STEP
 Open the site on a phone and paste a real key to confirm it maps.
 ==================================================
+
+==================================================
+UPDATE 2026-10-05 23:40:50 --- MAP THEN TEST
+Status: PASS
+
+1. BUG REPORTED AND FIXED
+Symptom: pasting a URL plus models built the tree, but nothing was
+actually tested, so the tree showed models that were merely listed.
+Worse, with no key yet there were zero mappings, so TEST ALL had
+nothing to run and silently did nothing.
+
+Root cause: mappings were only created inside `for (const key of keys)`.
+With no key that loop never executed, so the registry held models but
+no Key x Model mapping, and TEST ALL had an empty work list.
+
+2. FIXES
+core/mapper.js
+- New probeModelWithoutKey(): sends the real production-shaped inference
+  request with no credential. Listing a model in /models proves the
+  endpoint exists, not that the model runs (plan 7, 10).
+- Returns ok / status / latencyMs / needsKey. needsKey is true when the
+  endpoint answers AUTH_INVALID, which means "real model, cannot verify
+  yet" rather than a failure.
+
+core/pipeline.js
+- When a provider has no keys, every discovered model is probed
+  immediately and the verdict is persisted on the model record as
+  anonymousProbe plus the model status.
+- The report now includes anonymousProbes and workingModels.
+
+core/test-engine.js
+- testAll() calls ensureMappings() first. Every enabled key x model
+  combination that has no mapping gets one, because a mapping is the
+  unit health, cooldown and rotation act on (plan 3). Without this, a
+  provider imported before its key was invisible to TEST ALL.
+- ensureMappings() is idempotent, skips disabled keys, and returns how
+  many it created. The test summary reports it as `synthesised`.
+
+app.js
+- Models with no key yet show their probe verdict in the tree: green
+  when the model actually answered, or "Can key de xac minh" with the
+  honest AUTH_INVALID status when an endpoint demands a credential.
+  A model is never shown as healthy without a real probe behind it.
+
+3. HONESTY GUARANTEES
+- A provider that requires a key reports needsKey, never a false green.
+- A model the user supplied but /models did not list is still probed.
+- A network failure is reported as TEMP_ERROR, not as a key problem.
+
+4. TEST RESULTS
+- command: npm test
+- result: 56 tests, 56 passed, 0 failed
+- new suite M (7 cases):
+  M1 URL alone probes every model and records real results
+  M2 key-required endpoint flagged needsKey, never HEALTHY
+  M3 user model probed even when /models 404s
+  M4 TEST ALL synthesises missing mappings instead of no-op
+  M5 ensureMappings covers key x model exactly once, idempotent
+  M6 disabled key gets no new mappings
+  M7 network failure classified honestly
+
+5. END-TO-END VERIFIED (mocked)
+  step 1  URL + model, no key -> 3 models probed, all green
+  step 2  paste key -> 3 mappings created, Unresolved empty
+  step 3  TEST ALL -> 3 passed, 3 verified mappings in the tree
+
+6. HOW TO RUN
+npm test
+npm start
+
+7. NEXT RECOMMENDED STEP
+Test against a real provider from a phone to confirm CORS behaviour.
+==================================================

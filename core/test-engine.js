@@ -198,7 +198,15 @@ export class TestEngine {
 
   // ----------------------------------------------------------------- TEST ALL
 
-  async testAll({ filter = 'all', run, onProgress } = {}) {
+  async testAll({ filter = 'all', run, onProgress, ensureMappings = true } = {}) {
+    // Make sure every provider/model/key combination that SHOULD exist has a
+    // mapping before testing. Without this a provider imported without keys
+    // yields zero mappings and TEST ALL silently does nothing.
+    let synthesised = 0;
+    if (ensureMappings) {
+      synthesised = await this.ensureMappings();
+    }
+
     const mappings = await this.registry.listMappings();
     const target = filter === 'all' ? mappings : mappings.filter((m) => m.status === filter);
 
@@ -284,7 +292,47 @@ export class TestEngine {
     }
     await rescoreAll(this.registry);
 
-    return { ...summary, cancelled: run?.cancelled() ?? false };
+    return { ...summary, synthesised, cancelled: run?.cancelled() ?? false };
+  }
+
+  /**
+   * Create any missing Key x Model mapping. A mapping is the unit that health,
+   * cooldown and rotation act on (plan 3), so a key/model pair with no mapping
+   * is invisible to every other subsystem.
+   */
+  async ensureMappings() {
+    const [providers, keys, models, existing] = await Promise.all([
+      this.registry.listProviders(),
+      this.registry.listKeys(),
+      this.registry.listModels(),
+      this.registry.listMappings(),
+    ]);
+
+    const have = new Set(existing.map((m) => `${m.providerId}::${m.modelId}::${m.keyId}`));
+    let created = 0;
+
+    for (const provider of providers) {
+      const providerKeys = keys.filter((k) => k.providerId === provider.id && k.enabled !== false);
+      const providerModels = models.filter((m) => m.providerId === provider.id);
+      if (!providerKeys.length || !providerModels.length) continue;
+
+      for (const model of providerModels) {
+        for (const key of providerKeys) {
+          const identity = `${provider.id}::${model.modelId}::${key.id}`;
+          if (have.has(identity)) continue;
+          await this.registry.upsertMapping({
+            providerId: provider.id,
+            modelId: model.modelId,
+            keyId: key.id,
+            status: STATUS.UNRESOLVED,
+          });
+          have.add(identity);
+          created += 1;
+        }
+      }
+    }
+
+    return created;
   }
 
   /** Recompute and persist a provider's aggregate status. */

@@ -46,6 +46,45 @@ export async function resolveModel({ registry, provider, modelId }) {
   return { resolved: false, model: null, evidence: 0, reason: 'model not listed by provider' };
 }
 
+/**
+ * Verify a model without any key (plan 7, 10).
+ *
+ * A provider discovered via an unauthenticated /models proves the endpoint
+ * exists but says nothing about whether a specific model actually runs.
+ * Many gateways answer inference without a key (open free tier) or with a
+ * placeholder, so we send the real production-shaped probe and record
+ * whether the model genuinely answers. This is what fills the tree with
+ * "model known to work" instead of "model merely listed".
+ */
+export async function probeModelWithoutKey({ registry, provider, model, timeoutMs }) {
+  const adapter = getAdapter(provider.protocol);
+  const result = await adapter.probeModel({
+    baseURL: provider.baseURL,
+    secret: null,
+    model: model.modelId,
+    timeoutMs: timeoutMs ?? CONFIG.probeTimeoutMs,
+  });
+
+  const classification = result.classification ?? { status: STATUS.UNKNOWN_ERROR };
+  await registry.logEvent({
+    kind: 'probe-anonymous',
+    provider: provider.name,
+    model: model.modelId,
+    httpStatus: result.httpStatus ?? null,
+    classification: classification.status,
+    latencyMs: result.latencyMs ?? null,
+  });
+
+  return {
+    ok: result.ok,
+    status: classification.status,
+    latencyMs: result.latencyMs ?? null,
+    // AUTH_INVALID without a key means the endpoint requires a key. That is
+    // still useful: the model is real, we just cannot verify it yet.
+    needsKey: !result.ok && classification.status === STATUS.AUTH_INVALID,
+  };
+}
+
 /** Attach a key to a provider's models and optionally probe each mapping. */
 export async function mapKeyToProvider({
   registry,

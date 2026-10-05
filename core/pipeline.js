@@ -3,7 +3,7 @@ import { ITEM_TYPE, providerHintFromModel } from './classifier.js';
 import { STATUS } from './statuses.js';
 import { discoverProvider } from './discovery.js';
 import { probeMapping } from './probe.js';
-import { mapKeyToProvider, resolveUnresolved } from './mapper.js';
+import { mapKeyToProvider, resolveUnresolved, probeModelWithoutKey } from './mapper.js';
 import { baseUrlCandidates } from './normalizer.js';
 import { CONFIG } from './config.js';
 import { getAdapter } from './adapters/openai-compatible.js';
@@ -188,6 +188,49 @@ export async function importPaste({
         modelIds: knownModels.map((m) => m.modelId),
       });
       report.mappings.push(...mappings);
+    }
+
+    // No key yet: a Key x Model mapping cannot exist, but we can still prove
+    // which models genuinely answer. Without this the tree lists models that
+    // were never tested and TEST ALL has nothing to run.
+    if (keys.length === 0 && probe && knownModels.length > 0) {
+      for (const model of knownModels) {
+        onProgress({
+          stage: 'inference',
+          provider: freshProvider.name,
+          model: model.modelId,
+        });
+
+        const result = await probeModelWithoutKey({
+          registry,
+          provider: freshProvider,
+          model,
+        });
+
+        await registry.storage.put('models', {
+          ...model,
+          anonymousProbe: {
+            status: result.ok ? STATUS.HEALTHY : result.status,
+            latencyMs: result.latencyMs,
+            needsKey: result.needsKey,
+            testedAt: new Date().toISOString(),
+          },
+          status: result.ok ? STATUS.HEALTHY : result.status,
+          updatedAt: new Date().toISOString(),
+        });
+
+        report.anonymousProbes = (report.anonymousProbes ?? 0) + 1;
+        if (result.ok) report.workingModels = (report.workingModels ?? 0) + 1;
+
+        onProgress({
+          stage: 'inference-done',
+          provider: freshProvider.name,
+          model: model.modelId,
+          ok: result.ok,
+          status: result.ok ? STATUS.HEALTHY : result.status,
+          latencyMs: result.latencyMs,
+        });
+      }
     }
   }
 

@@ -225,8 +225,17 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
       const modelBadge = document.createElement('span');
       modelBadge.className = 'badge';
       const modelMappings = mappings.filter((m) => m.providerId === provider.id && m.modelId === model.modelId);
-      const anyHealthy = modelMappings.some((m) => m.status === 'HEALTHY');
-      modelBadge.textContent = anyHealthy ? '🟢' : statusMeta(modelMappings[0]?.status ?? 'DISCOVERED').emoji;
+      const anyHealthy = modelMappings.some((m) => m.status === STATUS.HEALTHY);
+      const probedStatus =
+        modelMappings[0]?.status ?? model.anonymousProbe?.status ?? 'DISCOVERED';
+      modelBadge.textContent = anyHealthy
+        ? '🟢'
+        : statusMeta(probedStatus).emoji;
+      if (model.anonymousProbe) {
+        modelBadge.title = model.anonymousProbe.needsKey
+          ? 'Chưa xác minh được — cần key'
+          : 'Đã kiểm tra bằng probe thật';
+      }
 
       modelRow.append(mCaret, mName, modelBadge);
 
@@ -234,10 +243,36 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
       modelChildren.className = 'children';
 
       if (!modelMappings.length) {
-        const empty = document.createElement('div');
-        empty.className = 'empty';
-        empty.textContent = 'Chưa gán key nào.';
-        modelChildren.append(empty);
+        // No key yet: show the anonymous probe verdict so the tree still
+        // reports whether this model genuinely answers.
+        const probeInfo = model.anonymousProbe;
+        if (probeInfo) {
+          const leaf = document.createElement('div');
+          leaf.className = 'leaf';
+
+          const dot = document.createElement('span');
+          dot.className = 'badge';
+          dot.textContent = statusMeta(probeInfo.status).emoji;
+
+          const name = document.createElement('span');
+          name.className = 'k';
+          name.textContent = probeInfo.needsKey
+            ? 'Cần key để xác minh'
+            : 'Đã kiểm tra không cần key';
+
+          const pill = document.createElement('span');
+          pill.className = 'pill ' + severity(probeInfo.status);
+          pill.textContent =
+            probeInfo.latencyMs != null ? probeInfo.latencyMs + 'ms' : statusVi(probeInfo.status);
+
+          leaf.append(dot, name, pill);
+          modelChildren.append(leaf);
+        } else {
+          const empty = document.createElement('div');
+          empty.className = 'empty';
+          empty.textContent = 'Chưa gán key nào.';
+          modelChildren.append(empty);
+        }
       }
 
       for (const mapping of modelMappings) {
