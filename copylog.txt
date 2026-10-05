@@ -356,3 +356,67 @@ npm start
 7. NEXT RECOMMENDED STEP
 Test against a real provider from a phone to confirm CORS behaviour.
 ==================================================
+
+==================================================
+UPDATE 2026-10-06 00:06:49 --- SHOW FULL API KEY ON UI + MASK FIX
+Status: PASS
+
+1. WHAT WAS ADDED
+Tap a masked key in the tree to reveal the full secret in place.
+Long-press copies it to the clipboard, which is the practical way to get
+a key out of a phone without reading it aloud.
+
+Safety properties kept:
+- Masked by default. The full secret is only rendered after an explicit
+  tap on that specific key.
+- The secret never enters the activity log. key.secret is referenced in
+  exactly two places: the DOM text and the clipboard write.
+- Export still omits secrets by default (plan 26), so reveal capability
+  did not become an accidental export path. Test U3 pins this.
+- Revealed text is coloured and carries an eye icon so a visible secret
+  is never mistaken for a masked one.
+
+2. BUG FOUND BY THE NEW TESTS
+maskSecret() replaced N hidden characters with N asterisks, so a long key
+produced a mask LONGER than the key itself: a 75-character key masked to
+76 characters. That breaks the point of masking and would widen a phone
+row.
+
+Fixed by capping the elided run at 8 asterisks and hiding the whole value
+when it is too short to show a head and tail safely.
+
+3. CSS FIX
+.leaf .k had `flex: 1` without `min-width: 0`. A flex item defaults to
+min-width:auto, so a long unbroken key would refuse to shrink and push
+the action buttons off screen instead of wrapping. Added min-width:0 and
+word-break:break-all, and the same treatment for .node .sub (URLs).
+
+4. TEST RESULTS
+- command: npm test
+- result: 64 tests, 64 passed, 0 failed
+- new suite U (8 cases): secret retrievable, masked differs from secret,
+  export still excludes secrets, long keys stay narrow, short secrets stay
+  hidden, masking never returns more characters than the input (U6),
+  masking never reveals the whole secret (U7), realistic key masks to a
+  phone-friendly width (U8).
+
+5. NOTE ON AN EARLIER REVERT
+While working on the classifier earlier in this session I made an edit
+that broke 4 of 5 real-looking keys, then reverted it without
+committing. The working tree was verified clean afterwards and the
+baseline classifier restored. The classifier is therefore UNCHANGED in
+this update. Two untracked files from that investigation remain:
+tests/corpus.js and tests/bench-classifier.js. Measured baseline there is
+45/71 with keys at 14/14, so the model-vs-key confusion is real and
+still open. It is deliberately not addressed in this update.
+
+6. HOW TO RUN
+npm test
+npm start
+
+7. NEXT RECOMMENDED STEP
+Decide whether to tackle the classifier with the benchmark in place
+(tests/bench-classifier.js gives a repeatable score), then reopen the
+question of purging registry entries that are keys attached to a
+healthy URL.
+==================================================

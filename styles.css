@@ -130,7 +130,12 @@ button.small { min-height: 34px; font-size: 12px; padding: 0 10px; flex: 0 0 aut
 .node .caret { width: 14px; color: var(--muted); font-size: 11px; }
 .node .name { flex: 1; min-width: 0; }
 .node .name b { font-weight: 600; }
-.node .sub { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.node .sub {
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
 .badge { font-size: 13px; }
 .pill {
   font-size: 10px;
@@ -154,7 +159,30 @@ button.small { min-height: 34px; font-size: 12px; padding: 0 10px; flex: 0 0 aut
   padding: 5px 2px;
   border-top: 1px dashed var(--border);
 }
-.leaf .k { flex: 1; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.leaf .k {
+  /* min-width:0 is required: a flex item defaults to min-width:auto, so a
+     long unbroken key would refuse to shrink and push the action buttons off
+     screen instead of wrapping. */
+  flex: 1;
+  min-width: 0;
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+/* Full secret is opt-in: tap the key. Colour change makes the state obvious
+   so a revealed secret is never mistaken for a masked one. */
+.leaf .k.revealable { cursor: pointer; }
+.leaf .k.revealable:active { opacity: 0.7; }
+.leaf .k.revealable::after {
+  content: ' 👁';
+  font-size: 10px;
+  opacity: 0.5;
+}
+.leaf .k.revealed {
+  color: var(--warn);
+  font-weight: 600;
+}
+.leaf .k.revealed::after { content: ' 🙈'; opacity: 0.9; }
 .leaf .lat { color: var(--muted); font-size: 11px; }
 
 /* -------------------------------------------------------------- unresolved */

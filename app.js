@@ -286,7 +286,33 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
 
         const masked = document.createElement('span');
         masked.className = 'k';
-        masked.textContent = key?.masked ?? 'unknown key';
+        // Masked by default; the full secret is only rendered on an explicit
+        // per-key tap and is never written to the log (plan 4, 31).
+        masked.textContent = key?.masked ?? 'chưa rõ';
+        if (key?.secret) {
+          masked.classList.add('revealable');
+          masked.addEventListener('click', () => {
+            const shown = masked.dataset.shown === '1';
+            masked.textContent = shown ? key.masked : key.secret;
+            masked.dataset.shown = shown ? '0' : '1';
+            masked.classList.toggle('revealed', !shown);
+          });
+          // Long press copies the full key. Clipboard is the only way to get
+          // it out of a phone UI without reading it aloud.
+          let pressTimer = null;
+          masked.addEventListener('touchstart', () => {
+            pressTimer = setTimeout(() => {
+              navigator.clipboard?.writeText(key.secret).then(
+                () => toast('Đã chép API key'),
+                () => toast('Không chép được')
+              );
+            }, 550);
+          }, { passive: true });
+          const clearPress = () => clearTimeout(pressTimer);
+          masked.addEventListener('touchend', clearPress);
+          masked.addEventListener('touchmove', clearPress);
+          masked.title = 'Chạm để hiện / ẩn · giữ để chép';
+        }
 
         const cool = fmtCooldown(mapping.cooldownUntil);
         const pill = document.createElement('span');

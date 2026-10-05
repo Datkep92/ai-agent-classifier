@@ -24,14 +24,27 @@ export async function fingerprintSecret(secret) {
   return `fp_${hash.slice(0, 16)}`;
 }
 
-/** Mask a secret for UI/logs: keep head+tail, elide middle. Never returns full secret. */
+/**
+ * Mask a secret for UI/logs: keep head+tail, elide the middle.
+ * The result is always shorter than the input, so a very long key cannot
+ * widen a row on a phone. Never returns the full secret.
+ */
 export function maskSecret(secret) {
   const s = String(secret ?? '');
   const { head, tail } = CONFIG.mask;
-  if (s.length <= head + tail) {
-    return `${'*'.repeat(Math.max(1, s.length))}`;
+
+  // Never emit more than this many asterisks, regardless of key length.
+  const MAX_STARS = 8;
+
+  // Needs at least three hidden characters between the head and the tail,
+  // otherwise the "mask" would reveal nearly the entire secret or end up
+  // longer than the value it hides.
+  if (s.length < head + tail + 4) {
+    return '*'.repeat(s.length);
   }
-  return `${s.slice(0, head)}${'*'.repeat(Math.max(4, s.length - head - tail))}${s.slice(-tail)}`;
+
+  const stars = Math.min(MAX_STARS, Math.max(4, s.length - head - tail));
+  return `${s.slice(0, head)}${'*'.repeat(stars)}${s.slice(-tail)}`;
 }
 
 /** Sanitize error text before storing/logging — strip secrets and cap length. */
