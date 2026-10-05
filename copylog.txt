@@ -128,3 +128,33 @@ Phone:   http://<your-lan-ip>:8787
 Enable GitHub Pages on the repository and test a real provider from
 the phone. If CORS blocks a provider, add a tiny proxy endpoint.
 ==================================================
+
+==================================================
+UPDATE 2026-10-05 23:13:53 --- GITHUB PAGES DEPLOY
+Status: PASS
+
+1. REPOSITORY
+- URL: https://github.com/Datkep92/ai-agent-classifier
+- Branch: main
+- Visibility: public
+
+2. PAGES
+- Enabled via GitHub API (branch: main, path: /)
+- Live URL: https://datkep92.github.io/ai-agent-classifier/
+- Build status: built (no errors)
+
+3. VERIFIED OVER HTTP
+- 22/22 assets returned 200: /, /index.html, /app.js, /styles.css,
+  all 17 core/*.js modules and both core/adapters/*.js files
+- Served index.html contains the expected title and module script tag
+- Served app.js imports resolve as ./core/... (root-relative, correct
+  for Pages serving from repository root)
+- No build step: the repo IS the deployable artifact
+
+4. NOTES
+- Deploy layout: index.html, app.js, styles.css and core/ live at the
+  repository root. ui/ is kept as the source copy.
+- .nojekyll is present so Pages serves the files verbatim.
+- Real provider calls may still be blocked by CORS depending on the
+  provider. A local server (npm start) or a proxy avoids this.
+==================================================
