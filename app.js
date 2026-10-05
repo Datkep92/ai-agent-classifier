@@ -6,7 +6,7 @@ import { createStorage } from './core/storage.js';
 import { Registry } from './core/registry.js';
 import { Router } from './core/router.js';
 import { TestEngine } from './core/test-engine.js';
-import { importPaste } from './core/pipeline.js';
+import { importPaste, syncAllProviders } from './core/pipeline.js';
 import { statusMeta, STATUS } from './core/statuses.js';
 import { CONFIG } from './core/config.js';
 
@@ -16,6 +16,10 @@ const router = new Router(registry);
 const engine = new TestEngine(registry, { router });
 
 let currentRun = null;
+
+// Background startup sync keeps its own handle: it must be cancellable without
+// taking ownership of the buttons that the user can already press.
+let startupRun = null;
 
 const $ = (id) => document.getElementById(id);
 const treeRoot = $('treeRoot');
@@ -237,7 +241,24 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
           : 'Đã kiểm tra bằng probe thật';
       }
 
-      modelRow.append(mCaret, mName, modelBadge);
+      // Favourite toggle. Marking a model in use is what "quick test" targets,
+      // and it survives export/import via capabilities.
+      const star = document.createElement('button');
+      star.className = 'small star' + (model.capabilities?.favourite ? ' on' : '');
+      star.textContent = model.capabilities?.favourite ? '\u2605' : '\u2606';
+      star.title = model.capabilities?.favourite
+        ? 'Đang dùng \u2014 bỏ dấu'
+        : 'Đánh dấu đang dùng';
+      star.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        const next = !model.capabilities?.favourite;
+        // Capabilities only. Going through upsertModel would record this as a
+        // "pasted" source and make a discovered model claim the user named it.
+        await registry.setModelCapabilities(provider.id, model.modelId, { favourite: next });
+        await refresh();
+      });
+
+      modelRow.append(mCaret, mName, star, modelBadge);
 
       const modelChildren = document.createElement('div');
       modelChildren.className = 'children';
@@ -458,10 +479,23 @@ async function refresh() {
 
 // ------------------------------------------------------------------ actions
 
+function setCancelVisible(visible) {
+  $('btnCancel').hidden = !visible;
+}
+
 function setBusy(busy) {
-  $('btnAnalyze').disabled = busy;
-  $('btnTestAll').disabled = busy;
-  $('btnCancel').hidden = !busy;
+  for (const id of [
+    'btnAnalyze',
+    'btnTestAll',
+    'btnTestQuick',
+    'btnSync',
+    'btnRetry',
+    'btnTestHealthy',
+  ]) {
+    $(id).disabled = busy;
+  }
+  // A foreground action hides the button only when nothing else is running.
+  setCancelVisible(busy || Boolean(startupRun));
 }
 
 function onProgress(event) {
@@ -538,6 +572,59 @@ async function retryMapping(mapping, provider, key, model) {
     toast(result.ok ? 'Đã khỏi' : result.classification.status);
   } catch (error) {
     log('lỗi thử lại: ' + (error?.message ?? error));
+  } finally {
+    setBusy(false);
+    currentRun = null;
+    await refresh();
+  }
+}
+
+async function syncModels({ force = false } = {}) {
+  setBusy(true);
+  currentRun = engine.createRun();
+  log('— tải lại danh sách model —');
+  try {
+    const summary = await syncAllProviders({
+      registry,
+      run: currentRun,
+      force,
+      onProgress: (e) => log(`tải ${e.position}/${e.total} · ${e.provider}`),
+    });
+    if (summary.cancelled) {
+      log('tải model đãng bị huỷ');
+      return;
+    }
+    log(
+      `xong: ${summary.providers} provider · +${summary.modelsAdded} model · ` +
+        `${summary.failed} lỗi · ${summary.resolved} mốc được gắn` +
+        `${summary.skipped ? `bỏ qua ${summary.skipped} provider còn mới` : ''}`
+    );
+    const gained = summary.modelsAdded + summary.resolved;
+    toast(gained ? `+${gained} mốc mới` : 'Không có mốc mới');
+  } catch (error) {
+    log('lỗi tải model: ' + (error?.message ?? error));
+    toast('Tải model lỗi');
+  } finally {
+    setBusy(false);
+    currentRun = null;
+    await refresh();
+  }
+}
+
+async function testQuick() {
+  setBusy(true);
+  currentRun = engine.createRun();
+  log('— kiểm tra nhanh —');
+  try {
+    const summary = await engine.testAll({
+      filter: 'quick',
+      run: currentRun,
+      onProgress,
+    });
+    log(`kiểm tra nhanh: ${summary.pass} đạt / ${summary.fail} lỗi / ${summary.skipped} bỏ qua`);
+    toast(summary.fail ? `${summary.fail} lỗi` : 'Xong');
+  } catch (error) {
+    log('lỗi kiểm tra nhanh: ' + (error?.message ?? error));
   } finally {
     setBusy(false);
     currentRun = null;
@@ -647,8 +734,11 @@ $('btnAnalyze').addEventListener('click', analyze);
 $('btnTestAll').addEventListener('click', testAll);
 $('btnRetry').addEventListener('click', () => testFiltered('failed'));
 $('btnTestHealthy').addEventListener('click', () => testFiltered(STATUS.HEALTHY));
+$('btnTestQuick').addEventListener('click', testQuick);
+$('btnSync').addEventListener('click', () => syncModels({ force: true }));
 $('btnCancel').addEventListener('click', () => {
   currentRun?.cancel();
+  startupRun?.cancel();
   toast('Đang huỷ…');
 });
 $('btnExport').addEventListener('click', exportJson);
@@ -664,4 +754,44 @@ if (location.protocol === 'file:') {
   $('corsBanner').hidden = false;
 }
 
-refresh().then(() => log('ready'));
+// Render whatever is already stored, then refresh every provider's model
+// list in the background. Kept off the render path so a slow or failing
+// provider never delays the first paint.
+refresh().then(() => log('sẵn sàng'));
+
+(async () => {
+  // Give it a run handle so HUỷ can stop it, but do not setBusy: the tree
+  // is already usable and a background refresh must not lock the buttons.
+  const run = engine.createRun();
+  startupRun = run;
+  setCancelVisible(true);
+  try {
+    if (!(await registry.listProviders()).length) return;
+    const summary = await syncAllProviders({
+      registry,
+      run,
+      onProgress: (e) => log(`tải ${e.position}/${e.total} · ${e.provider}`),
+    });
+
+    if (summary.cancelled) {
+      log('tải nền đãng bị huỷ');
+      return;
+    }
+
+    log(
+      `tải nền xong: ${summary.providers} provider · +${summary.modelsAdded} model` +
+        `${summary.failed ? ` · ${summary.failed} lỗi` : ''}` +
+        `${summary.skipped ? ` · ${summary.skipped} còn mới, bỏ qua` : ''}`
+    );
+
+    // Refresh whenever anything at all landed — including a parked model the
+    // resolver attached, which adds zero "new" models. Gating on modelsAdded
+    // alone left the tree showing stale state after a successful sync.
+    if (summary.providers || summary.resolved) await refresh();
+  } catch (error) {
+    log('tải nền lỗi: ' + (error?.message ?? error));
+  } finally {
+    startupRun = null;
+    if (!currentRun) setCancelVisible(false);
+  }
+})();

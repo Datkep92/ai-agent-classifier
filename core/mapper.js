@@ -92,6 +92,9 @@ export async function mapKeyToProvider({
   key,
   probe,
   modelIds = null,
+  // Caps automatic probing at import time so pasting a URL for a provider
+  // with hundreds of models stays cheap. Pass Infinity when the user is
+  // deliberately scanning, where completeness matters more than tokens.
   maxModels = 12,
 }) {
   const models = modelIds
@@ -124,43 +127,135 @@ export async function mapKeyToProvider({
 /**
  * Try a model that no provider advertises by probing it directly.
  * Only a real inference PASS resolves the item (plan 7, 24).
+ *
+ * Delegates to syncPastedModelsToProviders so speculative attaches have exactly
+ * one implementation. Two copies of this logic had already drifted apart: the
+ * rollback that removes a disproved guess was missing here, which let a failed
+ * guess land in the tree anyway.
  */
-async function probeUnknownModel({ registry, item, providers, probe }) {
-  const attempted = [];
+async function probeUnknownModel({ registry, item, providers, probe, log }) {
+  return syncPastedModelsToProviders({ registry, item, providers, probe, log });
+}
+
+/**
+ * Attach one parked MODEL to a provider that can actually serve it (plan 7).
+ *
+ * The forward direction (provider exists -> find matching parked model) is
+ * handled by the MODEL branch of resolveUnresolved below. This handles the
+ * case where NOTHING matches: the user named a model no /models response
+ * mentions. Not being advertised is not proof of being unusable, but
+ * attaching it on that hunch alone is exactly the "model assigned to the wrong
+ * provider" bug.
+ *
+ * So a speculative attach is committed only on evidence:
+ *   - a key exists and a real inference probe PASSES,
+ *   - no key exists but an unauthenticated probe PASSES (open gateways), or
+ *   - probing is switched off entirely (import without probe), where the row
+ *     is attached but stays UNRESOLVED rather than being called healthy.
+ * A provider that disproves the model leaves the item parked rather than
+ * guessed into whichever provider happens to exist.
+ *
+ * Every attempt is recorded on the item so a model that fails everywhere shows
+ * the user exactly what was tried.
+ */
+async function syncPastedModelsToProviders({ registry, item, providers, probe, log }) {
+  if (!providers.length) return { attached: 0 };
+
+  const tried = [];
 
   for (const provider of providers) {
-    const keys = await registry.listKeys(provider.id);
-    if (!keys.length) continue;
+    const keys = (await registry.listKeys(provider.id)).filter((k) => k.enabled !== false);
+
+    // No key is not a dead end: an unauthenticated probe is real evidence too
+    // (many gateways serve inference without one), and the pipeline already
+    // relies on exactly that when it first discovers a keyless provider.
+    if (!keys.length) {
+      const { model } = await registry.upsertModel({
+        providerId: provider.id,
+        modelId: item.raw,
+        source: 'pasted',
+        capabilities: { favourite: true },
+      });
+
+      if (!probe) {
+        tried.push({ provider: provider.name, result: 'ATTACHED_UNVERIFIED' });
+        await registry.removeUnresolved(item.id);
+        return { attached: 1 };
+      }
+
+      const anonymous = await probeModelWithoutKey({ registry, provider, model });
+      if (anonymous.ok) {
+        tried.push({ provider: provider.name, result: 'VERIFIED_ANONYMOUS' });
+        await registry.removeUnresolved(item.id);
+        log?.(`pasted model "${item.raw}" verified on ${provider.name} (no key needed)`);
+        return { attached: 1 };
+      }
+
+      for (const mapping of await registry.listMappings(provider.id)) {
+        if (mapping.modelId === model.modelId) await registry.storage.remove('mappings', mapping.id);
+      }
+      await registry.removeModel(provider.id, model.modelId);
+      tried.push({ provider: provider.name, result: 'NOT_AVAILABLE' });
+      continue;
+    }
 
     const { model } = await registry.upsertModel({
       providerId: provider.id,
       modelId: item.raw,
       source: 'pasted',
+      // A pasted model expresses intent, so it counts as in-use.
+      capabilities: { favourite: true },
     });
 
     let anyPass = false;
     for (const key of keys) {
       const { mapping } = await registry.upsertMapping({
         providerId: provider.id,
-        modelId: item.raw,
+        modelId: model.modelId,
         keyId: key.id,
         status: STATUS.UNRESOLVED,
       });
-
-      if (!probe) {
-        anyPass = false;
-        continue;
-      }
-
+      if (!probe) continue;
       const result = await probe({ registry, mapping, provider, model, key });
       if (result.ok) anyPass = true;
     }
 
-    attempted.push(`${provider.name}:${anyPass ? 'VERIFIED' : 'NOT_AVAILABLE'}`);
-    if (anyPass) return { resolved: true, provider, model };
+    if (!probe) {
+      // Discovery-only mode: keep the row, but do not claim it works.
+      tried.push({ provider: provider.name, result: 'ATTACHED_UNVERIFIED' });
+      await registry.removeUnresolved(item.id);
+      log?.(`pasted model "${item.raw}" attached to ${provider.name} (unverified)`);
+      return { attached: 1 };
+    }
+
+    if (anyPass) {
+      tried.push({ provider: provider.name, result: 'VERIFIED' });
+      await registry.removeUnresolved(item.id);
+      log?.(`pasted model "${item.raw}" verified on ${provider.name}`);
+      return { attached: 1 };
+    }
+
+    // Probed and disproved here. Undo the speculative row and its mappings so
+    // a failed guess cannot masquerade as one of the provider's real models.
+    for (const mapping of await registry.listMappings(provider.id)) {
+      if (mapping.modelId === model.modelId) await registry.storage.remove('mappings', mapping.id);
+    }
+    await registry.removeModel(provider.id, model.modelId);
+    tried.push({ provider: provider.name, result: 'NOT_AVAILABLE' });
   }
 
-  return { resolved: false, attempted };
+  const updated = {
+    ...item,
+    candidates: tried,
+    meta: { ...item.meta, reason: 'no provider confirmed this model yet' },
+  };
+  await registry.storage.put('unresolved', updated);
+  log?.(
+    `pasted model "${item.raw}" stayed unresolved: ` +
+      tried.map((t) => `${t.provider}=${t.result}`).join(', ')
+  );
+
+  return { attached: 0 };
 }
 
 /**
@@ -168,10 +263,20 @@ async function probeUnknownModel({ registry, item, providers, probe }) {
  * Runs whenever new registry data arrives.
  */
 export async function resolveUnresolved({ registry, probe, log }) {
+  // Providers are read fresh on every iteration: attaching a model to one
+  // provider must not make it visible to a later parked item's candidate scan,
+  // otherwise a disproved guess leaks back in through resolveModel below.
+  for (const item of await registry.listUnresolved()) {
+    if (item.detectedType !== 'MODEL') continue;
+    await syncPastedModelsToProviders({ registry, item, providers: await registry.listProviders(), probe, log });
+  }
+
   const items = await registry.listUnresolved();
-  const providers = await registry.listProviders();
   const resolved = [];
   const kept = [];
+  // Re-read after the model pass: a provider created during this sweep must be
+  // visible to the key/model branches below, not hidden by a stale snapshot.
+  const providers = await registry.listProviders();
 
   for (const item of items) {
     if (item.detectedType === 'API_KEY') {
@@ -214,9 +319,11 @@ export async function resolveUnresolved({ registry, probe, log }) {
         if (!models.length) {
           // Authenticated but advertises nothing: the key is valid and now
           // visible in the tree, but we cannot verify a model against it.
+          // Keep scanning: another provider may both accept the key and
+          // serve models, which is the more useful outcome.
           attempted.push({ provider: provider.name, result: 'AUTH_OK_NO_MODELS' });
           verifiedAny = true;
-          break;
+          continue;
         }
 
         const results = await mapKeyToProvider({
@@ -224,15 +331,17 @@ export async function resolveUnresolved({ registry, probe, log }) {
           provider,
           key,
           probe: probe ? (args) => probe(args) : null,
+          // Deliberate scan: cover every model, not the import-time subset.
+          maxModels: Infinity,
         });
 
         const passed = results.some((r) => r.ok);
         attempted.push({ provider: provider.name, result: passed ? 'VERIFIED' : 'LISTED_ONLY' });
 
-        if (passed) {
-          verifiedAny = true;
-          break;
-        }
+        // Do NOT stop at the first provider that accepts the key. A secret
+        // pasted once may be valid on several gateways, and finding them all
+        // is the point of scanning (plan 7, 15).
+        if (passed) verifiedAny = true;
       }
 
       if (verifiedAny) {
@@ -273,23 +382,14 @@ export async function resolveUnresolved({ registry, probe, log }) {
       // real inference probe on each provider that has a key (plan 7).
       // Inference PASS is the strongest evidence in the system (plan 24);
       // anything weaker stays Unresolved rather than being guessed.
-      const probed = await probeUnknownModel({ registry, item, providers, probe });
-      if (probed.resolved) {
-        await registry.removeUnresolved(item.id);
-        resolved.push({
-          raw: item.raw,
-          provider: probed.provider.name,
-          model: item.raw,
-          via: 'probe',
-        });
+      const probed = await probeUnknownModel({ registry, item, providers, probe, log });
+      if (probed.attached) {
+        // The helper already removed the item and recorded what it tried.
+        kept.push(item);
       } else {
-        const updated = {
-          ...item,
-          candidates: probed.attempted,
-          meta: { ...item.meta, reason: 'not listed by any provider; probe did not confirm' },
-        };
-        await registry.storage.put('unresolved', updated);
-        kept.push(updated);
+        // It also already wrote the updated item (with candidates) to storage.
+        // Re-reading keeps this branch from clobbering that record.
+        kept.push((await registry.storage.get('unresolved', item.id)) ?? item);
       }
       continue;
     }

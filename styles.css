@@ -149,6 +149,21 @@ button.small { min-height: 34px; font-size: 12px; padding: 0 10px; flex: 0 0 aut
 .pill.ok { color: var(--ok); border-color: var(--ok); }
 .pill.bad { color: var(--danger); border-color: var(--danger); }
 
+/* Favourite toggle on a model row. Filled star = in use. */
+button.star {
+  min-height: 30px;
+  min-width: 30px;
+  padding: 0 6px;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+}
+button.star.on {
+  color: var(--warn);
+}
+
 .children { padding: 0 0 8px 18px; display: none; }
 .node.open > .children { display: block; }
 .leaf {

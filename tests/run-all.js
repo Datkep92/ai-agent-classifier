@@ -8,6 +8,11 @@ import { registerOpsCases } from './cases-ops.js';
 import { registerKeyScanCases } from './cases-key-scan.js';
 import { registerMapTestCases } from './cases-map-test.js';
 import { registerSecretUiCases } from './cases-secret-ui.js';
+import {
+  registerSyncCases,
+  registerProviderSyncCases,
+  registerQuickTestCases,
+} from './cases-sync-scan.js';
 
 const mock = createMockFetch({ '/models': OK_MODELS, '/chat/completions': OK_CHAT });
 globalThis.fetch = mock;
@@ -21,6 +26,9 @@ registerOpsCases(mock);
 registerKeyScanCases(mock);
 registerMapTestCases(mock);
 registerSecretUiCases(mock);
+registerSyncCases(mock);
+registerProviderSyncCases(mock);
+registerQuickTestCases(mock);
 
 const ok = await run();
 process.exit(ok ? 0 : 1);

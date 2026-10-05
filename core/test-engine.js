@@ -198,17 +198,40 @@ export class TestEngine {
 
   // ----------------------------------------------------------------- TEST ALL
 
+  /**
+   * Build the quick-test target list: mappings whose model the user marked as
+   * in use, or that have never been tested at all. Covers what matters
+   * without spending a probe on every model a provider happens to advertise.
+   */
+  async quickTargets() {
+    const [models, mappings] = await Promise.all([
+      this.registry.listModels(),
+      this.registry.listMappings(),
+    ]);
+    const favourite = new Set(
+      models.filter((m) => m.capabilities?.favourite).map((m) => `${m.providerId}::${m.modelId}`)
+    );
+    return mappings.filter((m) => {
+      const key = `${m.providerId}::${m.modelId}`;
+      return favourite.has(key) || !m.lastTestAt;
+    });
+  }
+
   async testAll({ filter = 'all', run, onProgress, ensureMappings = true } = {}) {
+    let synthesised = 0;
+
     // Make sure every provider/model/key combination that SHOULD exist has a
     // mapping before testing. Without this a provider imported without keys
     // yields zero mappings and TEST ALL silently does nothing.
-    let synthesised = 0;
-    if (ensureMappings) {
-      synthesised = await this.ensureMappings();
-    }
+    if (ensureMappings) synthesised = await this.ensureMappings();
 
-    const mappings = await this.registry.listMappings();
-    const target = filter === 'all' ? mappings : mappings.filter((m) => m.status === filter);
+    let target;
+    if (filter === 'quick') {
+      target = await this.quickTargets();
+    } else {
+      const mappings = await this.registry.listMappings();
+      target = filter === 'all' ? mappings : mappings.filter((m) => m.status === filter);
+    }
 
     const providers = await this.registry.listProviders();
     const keys = await this.registry.listKeys();

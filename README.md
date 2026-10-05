@@ -12,7 +12,7 @@ Built from `plan(1).md`. Zero runtime dependencies, zero build step.
 ## Quick start
 
 ```sh
-npm test          # run the full suite (31 tests)
+npm test          # run the full suite (87 tests)
 npm start         # serve the UI on http://localhost:8787
 ```
 
@@ -78,6 +78,26 @@ Workers, a Telegram bot, or an EXE.
 
 ---
 
+## Buttons
+
+| Button | What it does |
+| --- | --- |
+| `PHAN TICH + NHAP` | Classify and import whatever is in the paste box. |
+| `TAI LAI MODEL` | Force-refresh every provider's `/models` list now. |
+| `KIEM TRA TAT CA` | Probe every existing mapping. |
+| `KIEM TRA NHANH` | Probe only starred models and mappings never tested. |
+| `HUY` | Stop the current run, including the background startup sync. |
+
+A star next to a model means "in use". Pasted models are starred
+automatically; discovered models can be starred by tapping the star.
+Stars survive export/import and drive what quick test covers.
+
+On load, the tree renders from storage first, then every stored
+provider refreshes its model list in the background. A provider whose
+last successful fetch is under 30 minutes old is skipped, so opening
+the page repeatedly does not re-download the same lists. The background
+sync can be cancelled and never blocks the buttons.
+
 ## Rules it will not break
 
 - Never marks a key dead because `/models` failed (inference may still work).
@@ -86,6 +106,9 @@ Workers, a Telegram bot, or an EXE.
 - Never deletes a key. Never logs or exports a full secret by default.
 - Never discards pasted input it could not classify — it lands in Unresolved.
 - Never appends `/v1` without evidence; it is only tested as a candidate.
+- Never attaches a pasted model to a provider that does not prove it.
+  An attach needs a real inference PASS (with or without a key); a
+  disproved guess is rolled back and the model stays parked.
 
 ## Running tests
 
@@ -93,5 +116,17 @@ Workers, a Telegram bot, or an EXE.
 npm test
 ```
 
-31 tests: 15 mandatory plan cases (A-O) plus 9 security/invariant checks.
+87 tests: 15 mandatory plan cases (A-O), plus security/invariant checks,
+key auto-scan, model attach, provider sync, and quick-test cases.
 All network access is mocked — no real API calls.
+
+The classifier benchmark is separate and repeatable:
+
+```sh
+node --no-experimental-fetch tests/bench-classifier.js
+```
+
+It scores URL / MODEL / API_KEY classification on real-world-shaped
+inputs. Current standing: 45/71 overall, 14/14 API keys, 8/8 URLs,
+18/44 models. Model-vs-key confusion is a known open defect and is
+deliberately tracked rather than papered over.

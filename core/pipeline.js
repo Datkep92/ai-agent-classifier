@@ -6,6 +6,7 @@ import { probeMapping } from './probe.js';
 import { mapKeyToProvider, resolveUnresolved, probeModelWithoutKey } from './mapper.js';
 import { baseUrlCandidates } from './normalizer.js';
 import { CONFIG } from './config.js';
+import { mapWithConcurrency, sanitizeError } from './util.js';
 import { getAdapter } from './adapters/openai-compatible.js';
 
 /**
@@ -19,6 +20,20 @@ import { getAdapter } from './adapters/openai-compatible.js';
  *   4. runs discovery + probes,
  *   5. parks anything still unmapped in Unresolved (§3, §23).
  */
+
+/** Record a sanitized failure so one bad provider stays visible in the log (§31). */
+async function logEventError(registry, provider, error) {
+  try {
+    await registry.logEvent({
+      kind: 'discovery',
+      provider: provider?.name ?? null,
+      classification: STATUS.UNKNOWN_ERROR,
+      error: sanitizeError(error),
+    });
+  } catch {
+    // A failure to record a failure must never mask the original problem.
+  }
+}
 
 /** Create providers from URLs, trying /models to verify OpenAI-compatibility (§7, N). */
 async function ensureProvider({ registry, url, providerHint, adapter, onProgress }) {
@@ -124,6 +139,8 @@ export async function importPaste({
         providerId: provider.id,
         modelId: model.value,
         source: 'pasted',
+        // The user named this model, so it is in use by intent.
+        capabilities: { favourite: true },
       });
       if (created) report.models.push(`${provider.name}/${stored.modelId}`);
     }
@@ -251,6 +268,137 @@ export async function importPaste({
   report.mappingsCount = (await registry.listMappings()).length;
 
   return report;
+}
+
+/**
+ * Refresh every stored provider's model list (plan 7, 21).
+ *
+ * Called once at startup so the tree reflects what each provider currently
+ * serves, rather than only what was known when the provider was first
+ * pasted. Rendering happens from cache first; this runs afterwards and
+ * merges new models in as they arrive.
+ *
+ * Discovery only: it fetches model ids and never probes inference, so a
+ * large provider costs no tokens.
+ */
+export async function syncAllProviders({
+  registry,
+  run,
+  onProgress,
+  force = false,
+  minAgeMs = 30 * 60 * 1000,
+  probe = true,
+} = {}) {
+  const providers = await registry.listProviders();
+  const summary = {
+    providers: 0,
+    skipped: 0,
+    modelsAdded: 0,
+    failed: 0,
+    cancelled: false,
+  };
+  if (!providers.length) return summary;
+
+  const now = Date.now();
+
+  // Re-fetching every provider on every page load would burn rate limits for
+  // no new information, so a recent discovery is left alone unless forced.
+  const stale = providers.filter((p) => {
+    if (force) return true;
+    const at = Date.parse(p.lastSyncedAt ?? '');
+    return !Number.isFinite(at) || now - at > minAgeMs;
+  });
+
+  summary.skipped = providers.length - stale.length;
+  if (!stale.length) return summary;
+
+  let done = 0;
+
+  // Bounded concurrency: providers are independent network calls, so waiting
+  // for one dead host before starting the next would serialise the whole sync
+  // behind the slowest provider. The limit keeps us from opening 50 sockets.
+  const results = await mapWithConcurrency(
+    stale,
+    CONFIG.testConcurrency,
+    async (provider) => {
+      onProgress?.({
+        stage: 'discovery',
+        provider: provider.name,
+        position: done + 1,
+        total: stale.length,
+      });
+
+      try {
+        const before = new Set(
+          (await registry.listModels(provider.id)).map((m) => m.modelId)
+        );
+
+        // Authenticate with an existing key when one is present; discovery can
+        // still succeed unauthenticated on open gateways.
+        const key = (await registry.listKeys(provider.id))[0] ?? null;
+
+        const result = await discoverProvider({ registry, provider, key, onProgress });
+
+        // Stamp the sync time ourselves. discoverProvider rewrites the
+        // provider row (including updatedAt) on every outcome, so updatedAt
+        // cannot answer "was this fetched recently?" on its own.
+        await registry.storage.put('providers', {
+          ...(await registry.getProvider(provider.id)),
+          lastSyncedAt: new Date().toISOString(),
+        });
+
+        if (!result.ok) return { ok: false, added: 0 };
+
+        let added = 0;
+        for (const modelId of result.models) {
+          if (!before.has(modelId)) added += 1;
+        }
+        return { ok: true, added };
+      } catch (error) {
+        // One provider throwing must never abort the sweep — the others are
+        // still worth refreshing, and a failed sync is a normal outcome.
+        logEventError(registry, provider, error);
+        return { ok: false, added: 0, error };
+      } finally {
+        done += 1;
+      }
+    }
+  );
+
+  for (const result of results) {
+    if (!result) continue;
+    if (result.ok) {
+      summary.providers += 1;
+      summary.modelsAdded += result.added;
+    } else {
+      summary.failed += 1;
+    }
+  }
+
+  if (run?.cancelled()) {
+    summary.cancelled = true;
+    return summary;
+  }
+
+  // Newly discovered models can adopt models and keys pasted earlier, so the
+  // parked inbox is swept once the sweep finishes — not per provider, which
+  // would re-probe the same parked item repeatedly.
+  const before = (await registry.listUnresolved()).length;
+  await resolveUnresolved({
+    registry,
+    probe: probe ? (args) => probeMapping(args) : null,
+    log: () => {},
+  });
+
+  if (run?.cancelled()) summary.cancelled = true;
+
+  // Count what actually left the inbox. resolution.resolved also carries
+  // per-mapping probe results, so its length is not the number of items
+  // resolved; the before/after difference is.
+  const remaining = (await registry.listUnresolved()).length;
+  summary.resolved = Math.max(0, before - remaining);
+  summary.kept = remaining;
+  return summary;
 }
 
 /**

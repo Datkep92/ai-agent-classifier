@@ -90,6 +90,14 @@ export async function discoverProvider({
     },
   });
 
+  // Stamp a successful fetch. Startup sync uses this to skip a provider that
+  // was just refreshed instead of re-downloading the list on every page load.
+  // Only success stamps: a provider that failed stays eligible for a retry.
+  await registry.storage.put('providers', {
+    ...(await registry.getProvider(provider.id)),
+    lastSyncedAt: new Date().toISOString(),
+  });
+
   if (key) {
     // Discovery PASS is authentication evidence (70), but never "verified"
     // for inference. §10: do not conclude inference works.

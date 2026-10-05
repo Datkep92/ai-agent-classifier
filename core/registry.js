@@ -114,9 +114,14 @@ export class Registry {
 
     const existing = await this.findModel(providerId, cleanId);
     if (existing) {
+      // A model can arrive from two directions at once: the user pasted it
+      // and discovery found it. Record both instead of letting the last
+      // writer win, so "the user asked for this" is never lost (plan 25).
+      const sources = [...new Set([...(existing.sources ?? [existing.source]), source])];
       const updated = {
         ...existing,
-        source: existing.source === 'discovered' ? 'discovered' : source,
+        source: sources.includes('discovered') ? 'discovered' : existing.source,
+        sources,
         capabilities: { ...existing.capabilities, ...capabilities },
         updatedAt: isoNow(),
       };
@@ -130,6 +135,7 @@ export class Registry {
       providerId,
       modelId: cleanId,
       source,
+      sources: [source],
       status: STATUS.DISCOVERED,
       capabilities,
       createdAt: isoNow(),
@@ -137,6 +143,38 @@ export class Registry {
     };
     await this.storage.put('models', model);
     return { model, created: true };
+  }
+
+  /**
+   * Delete a model. Used to undo a speculative attach: if we tried a provider
+   * on a hunch and the probe disproved it, the row must not linger in the tree
+   * as though the user had declared it there.
+   */
+  async removeModel(providerId, modelId) {
+    const existing = await this.findModel(providerId, modelId);
+    if (!existing) return false;
+    await this.storage.remove('models', existing.id);
+    return true;
+  }
+
+  /**
+   * Merge capabilities into a model WITHOUT touching provenance.
+   *
+   * `upsertModel` records where a model came from (source/sources). Starring a
+   * model is not a provenance event — it must never make a discovered model
+   * claim it was "pasted", or the tree would report a source the user never
+   * gave. Also keeps discovery from clobbering a star set earlier.
+   */
+  async setModelCapabilities(providerId, modelId, capabilities = {}) {
+    const existing = await this.findModel(providerId, modelId);
+    if (!existing) return null;
+    const updated = {
+      ...existing,
+      capabilities: { ...existing.capabilities, ...capabilities },
+      updatedAt: isoNow(),
+    };
+    await this.storage.put('models', updated);
+    return updated;
   }
 
   // --------------------------------------------------------------------- Keys

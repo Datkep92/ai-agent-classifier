@@ -420,3 +420,112 @@ Decide whether to tackle the classifier with the benchmark in place
 question of purging registry entries that are keys attached to a
 healthy URL.
 ==================================================
+
+==================================================
+COP YLOG - PASTED MODEL ATTACH, MODEL SYNC, FULL KEY SCAN
+Date: 2026-10-06
+Repo: ai-agent-classifier (static, GitHub Pages)
+Live: https://datkep92.github.io/ai-agent-classifier/
+==================================================
+
+1. WHAT WAS ASKED
+1) A model the user pastes must attach to an existing or new URL.
+2) On UI startup, load every stored provider's full model list from
+   /models, in the background, with progress.
+3) When a key is pasted, scan it against all known providers x models
+   instead of stopping at the first provider or the first 12 models.
+
+2. DESIGN DECISIONS
+- A pasted model is automatically marked favourite, because naming a
+  model is a statement of intent. Discovered models can be starred by
+  hand with the new star button.
+- Two buttons were added: "TAAI LAI MODEL" (force refresh, ignores the
+  freshness window) and "KIEM TRA NHANH" (quick test).
+- Quick test targets exactly: mappings whose model is starred, plus
+  mappings that have never been tested.
+- Startup sync skips a provider whose last successful fetch is under
+  30 minutes old. Only SUCCESS stamps that timestamp, so a provider that
+  failed stays eligible for a retry.
+- Import-time probing keeps its existing 12-model cap. Only a
+  deliberate key scan uses unlimited models, so pasting stays cheap
+  while scanning stays complete.
+- Star toggling goes through a dedicated registry method
+  (setModelCapabilities) rather than upsertModel. Going through upsert
+  recorded the model as "pasted", which made a discovered model claim
+  the user had named it.
+
+3. BUGS FOUND BY THE NEW TESTS
+The new suite (23 cases) caught four real defects that had been
+latent in the in-progress implementation:
+
+(a) Duplicate speculative-attach logic. probeUnknownModel and
+    syncPastedModelsToProviders were two copies of the same idea, and
+    they had drifted: the rollback that deletes a disproved guess
+    existed only in one of them. A model no provider served was rolled
+    back and then immediately re-added by the other path, which is
+    exactly the "model assigned to the wrong provider" bug reported by
+    the user. Fixed by collapsing both into one implementation.
+
+(b) Stale candidates record. The failed-attach branch rewrote the
+    parked item with `candidates: probed.attempted`, a field that no
+    longer existed after the refactor. The UI therefore showed no
+    record of what had been tried. It now re-reads the record the
+    helper already wrote.
+
+(c) Freshness timestamp never set. The 30-minute skip keyed off a field
+    that nothing ever wrote, so every page load re-fetched every
+    provider. discoverProvider now stamps lastSyncedAt on success.
+
+(d) Wrong resolved count. syncAllProviders counted
+    resolveUnresolved().resolved.length, but that array also carries
+    per-mapping probe results, so the number was meaningless. It now
+    measures the actual before/after difference in the inbox.
+
+4. TEST RESULTS
+- command: npm test
+- result: 87 tests, 87 passed, 0 failed (was 64)
+- new suites:
+  P (7): pasted model before URL attaches and is starred; URL before
+    model creates no duplicate; pasted+discovered keeps BOTH sources and
+    the star; a model no provider serves is NOT attached and stays
+    parked with a record of what was tried; a failed attach leaves no
+    orphan mappings; a keyless provider still counts as evidence when
+    inference answers; a keyless provider that refuses leaves it parked.
+  S (7): sync adds newly listed models; skips a fresh provider; force
+    refreshes anyway; never exceeds the concurrency limit (verified by
+    peak in-flight counter); one broken host does not stop the others;
+    cancellation leaves parked items untouched; sync attaches a parked
+    model discovery can now prove.
+  C (3): a key accepted by the first provider is still tried on the
+    second; all 30 models are probed, not the first 12; import-time
+    mapping still caps at exactly 12 probes.
+  Q (6): quick targets are exactly starred + never-tested; quick test
+    runs only those; starring changes capabilities without touching
+    sources; later discovery never clears a star; export/import carries
+    the star; un-starring removes the model from quick targets.
+- command: node --no-experimental-fetch tests/bench-classifier.js
+- result: TOTAL 45/71, API_KEY 14/14, URL 8/8, MODEL 18/44.
+  UNCHANGED from baseline. The classifier was not touched in this
+  update; the model-vs-key confusion remains open on purpose.
+
+5. HOW THIS WAS VERIFIED
+- Every behaviour change was written as a failing test first, then
+  fixed, then re-run against the full suite.
+- All new tests use a private mock fetch table so they cannot inherit
+  another test's routes. The earlier shared-table approach produced
+  two false passes caused by leftover routes.
+- All assets confirmed served 200 from the local static server with
+  correct byte sizes; app.js served byte-identical to the local file.
+
+6. NOTES
+- No real credentials appear in this log, in the tests, or in any
+  committed file. All keys are obvious synthetic fixtures.
+- Export still omits secrets by default; the full key remains
+  retrievable on demand in the UI only.
+- CORS is still a limitation on GitHub Pages for real providers.
+
+7. NEXT RECOMMENDED STEP
+The classifier benchmark is unchanged and repeatable at 45/71. It is
+the one open known defect, and it can now be worked on with a
+repeatable score and a passing 87-test safety net.
+==================================================
