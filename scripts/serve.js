@@ -29,12 +29,8 @@ const MIME = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
-const ALIASES = new Map([
-  ['/', '/index.html'],
-  ['/ui/index.html', '/index.html'],
-  ['/ui/app.js', '/app.js'],
-  ['/ui/styles.css', '/styles.css'],
-]);
+// The UI lives at the repository root so GitHub Pages can serve it verbatim.
+const ALIASES = new Map([['/', '/index.html']]);
 
 function resolvePath(pathname) {
   const clean = decodeURIComponent(pathname.split('?')[0]);

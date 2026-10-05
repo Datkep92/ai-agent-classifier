@@ -158,3 +158,66 @@ Status: PASS
 - Real provider calls may still be blocked by CORS depending on the
   provider. A local server (npm start) or a proxy avoids this.
 ==================================================
+
+==================================================
+UPDATE 2026-10-05 23:21:21 --- COMPLETION AUDIT AND GAP FIXES
+Status: PASS
+
+1. AUDIT FOUND (and now fixed) REAL GAPS
+- a) ui/ held a STALE DUPLICATE of the UI whose imports (../core/)
+  were wrong for a root deploy. Two drifting copies of the same file
+  is a real maintenance hazard. Removed ui/; root files are the only
+  source of truth. Server aliases for /ui/* removed to match.
+- b) Auto-recovery (plan 19) was DEAD CODE. isRecoverable(),
+  needsManualRecheck() and refreshBreaker() existed but nothing ever
+  called them, so an expired cooldown never actually freed a mapping
+  and an elapsed circuit never moved to HALF_OPEN.
+  Now wired into Router.candidates(), which every path (pick, UI,
+  test engine) goes through.
+- c) HALF_OPEN had no probe budget. config.circuit.halfOpenProbes was
+  configured but unused, so a recovering provider could be stampeded.
+  The budget is now claimed before a real request and enforced during
+  candidate selection.
+- d) Event log grew without bound (plan 31). CONFIG.eventLogLimit was
+  defined but never applied. Registry now trims to the cap on write.
+- e) TEST KEY / TEST MODEL / Retry were unreachable from the UI
+  (plan 20, 22). Added: per-key TEST button, per-mapping retry,
+  Retry-failed and Re-test-healthy filters. No dead handlers remain.
+- f) testAll() silently skipped orphaned mappings, hiding data
+  integrity problems. They are now counted and surfaced.
+
+2. BUGS FOUND BY THE NEW TESTS
+- recover() lived only in pick(), so callers of candidates() saw stale
+  cooldowns. Moved into candidates(); test R1 covers this.
+- Retention, concurrency, filter and cancel paths had no coverage at
+  all before; tests O1-O5 now pin them down.
+
+3. TEST RESULTS
+- command: npm test
+- result: 44 tests, 44 passed, 0 failed
+- breakdown: plan cases A-O (22) + security (9) + recovery (8) + ops (5)
+- network: fully mocked, no real API calls
+
+4. VERIFIED OVER HTTP (local server, port 8796)
+- 200: /, /app.js, /styles.css and every core/*.js module
+- 404: /ui/app.js and /ui/index.html (stale copies confirmed gone)
+- served index.html exposes btnAnalyze, btnTestAll, btnRetry,
+  btnTestHealthy, btnExport, btnImportFile, btnCancel
+
+5. KNOWN ISSUES (unchanged)
+- Provider calls from a browser may be blocked by CORS depending on
+  the provider origin. Local server or a proxy avoids this.
+- No browser available in this environment, so the UI was verified by
+  serving assets and resolving module imports, not by visual render.
+- Jailbroken Node cannot run node:http or global fetch (WebAssembly
+  disabled); scripts/serve.js uses node:net to work around it.
+
+6. HOW TO RUN
+npm install
+npm test
+npm start
+
+7. NEXT RECOMMENDED STEP
+Open the deployed site on a phone and paste one real provider to
+confirm the CORS behaviour, then add a proxy only if a call fails.
+==================================================

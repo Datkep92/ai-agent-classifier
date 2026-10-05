@@ -209,7 +209,7 @@ export class TestEngine {
     const keyById = new Map(keys.map((k) => [k.id, k]));
     const modelByKey = new Map(models.map((m) => [`${m.providerId}::${m.modelId}`, m]));
 
-    const summary = { pass: 0, fail: 0, skipped: 0, results: [] };
+    const summary = { pass: 0, fail: 0, skipped: 0, orphaned: 0, results: [] };
 
     await mapWithConcurrency(
       target,
@@ -224,7 +224,19 @@ export class TestEngine {
         const key = keyById.get(mapping.keyId);
         const model = modelByKey.get(`${mapping.providerId}::${mapping.modelId}`);
         if (!provider || !key || !model) {
-          summary.skipped += 1;
+          // A mapping referencing a missing provider/key/model cannot be
+          // tested. Counted separately from skipped so the UI can surface
+          // it instead of hiding data-integrity problems.
+          summary.orphaned += 1;
+          summary.results.push({
+            mappingId: mapping.id,
+            providerId: mapping.providerId,
+            modelId: mapping.modelId,
+            ok: false,
+            status: STATUS.UNRESOLVED,
+            error: 'orphaned mapping: missing ' +
+              [!provider && 'provider', !key && 'key', !model && 'model'].filter(Boolean).join('/'),
+          });
           return;
         }
 

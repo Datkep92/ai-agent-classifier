@@ -8,6 +8,7 @@ import {
 } from './normalizer.js';
 import { STATUS } from './statuses.js';
 import { fingerprintSecret, maskSecret, makeId, isoNow, nowMs } from './util.js';
+import { CONFIG } from './config.js';
 
 /**
  * Registry (§3, §25).
@@ -324,6 +325,8 @@ export class Registry {
 
   /** Append a sanitized observability event (§31). Never stores full secrets. */
   async logEvent(event) {
+    // Bounded retention: keep the last N events instead of growing forever
+    // (§31). Trim after write so the cap is always respected.
     const record = {
       id: makeId('evt'),
       timestamp: isoNow(),
@@ -339,7 +342,20 @@ export class Registry {
       kind: event.kind ?? 'test',
     };
     await this.storage.put('events', record);
+    await this._trimEvents();
     return record;
+  }
+
+  /** Drop the oldest events beyond the configured retention limit. */
+  async _trimEvents() {
+    const limit = CONFIG.eventLogLimit;
+    const events = await this.storage.list('events');
+    if (events.length <= limit) return;
+    events.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+    const excess = events.slice(0, events.length - limit);
+    for (const event of excess) {
+      await this.storage.remove('events', event.id);
+    }
   }
 
   async listEvents(limit = 100) {

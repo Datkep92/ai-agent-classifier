@@ -7,7 +7,7 @@ import { Registry } from './core/registry.js';
 import { Router } from './core/router.js';
 import { TestEngine } from './core/test-engine.js';
 import { importPaste } from './core/pipeline.js';
-import { statusMeta } from './core/statuses.js';
+import { statusMeta, STATUS } from './core/statuses.js';
 import { CONFIG } from './core/config.js';
 
 const storage = createStorage(CONFIG.storage.driver);
@@ -181,12 +181,32 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
             : statusMeta(mapping.status).label;
         if (cool) pill.title = 'cooldown remaining';
 
+        // TEST KEY (plan 20) plus a targeted Retry for this mapping only.
+        const retry = document.createElement('button');
+        retry.className = 'small';
+        retry.textContent = '⟳';
+        retry.title = 'Retry this mapping';
+        retry.addEventListener('click', (event) => {
+          event.stopPropagation();
+          retryMapping(mapping, provider, key, model);
+        });
+
         const info = document.createElement('button');
         info.className = 'small';
         info.textContent = '⋯';
         info.addEventListener('click', (event) => {
           event.stopPropagation();
           showError(mapping);
+        });
+
+        // TEST KEY action (plan 20) scoped to this provider's key.
+        const testKeyBtn = document.createElement('button');
+        testKeyBtn.className = 'small';
+        testKeyBtn.textContent = 'T';
+        testKeyBtn.title = 'Test this key against all its mappings';
+        testKeyBtn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          testKeyNow(key.id);
         });
 
         const toggle = document.createElement('button');
@@ -199,7 +219,7 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
           await refresh();
         });
 
-        leaf.append(dot, masked, pill, info, toggle);
+        leaf.append(dot, masked, pill, testKeyBtn, retry, info, toggle);
         modelChildren.append(leaf);
       }
 
@@ -365,6 +385,61 @@ async function testProvider(provider) {
   }
 }
 
+async function retryMapping(mapping, provider, key, model) {
+  setBusy(true);
+  currentRun = engine.createRun();
+  log(`— retry ${provider.name}/${model.modelId} —`);
+  try {
+    const { probeMapping } = await import('./core/probe.js');
+    const result = await probeMapping({ registry, mapping, provider, model, key });
+    toast(result.ok ? 'Recovered' : result.classification.status);
+  } catch (error) {
+    log('retry error: ' + (error?.message ?? error));
+  } finally {
+    setBusy(false);
+    currentRun = null;
+    await refresh();
+  }
+}
+
+async function testFiltered(filter, label) {
+  setBusy(true);
+  currentRun = engine.createRun();
+  log('— ' + (label || filter) + ' —');
+  try {
+    const summary = await engine.testAll({
+      filter,
+      run: currentRun,
+      onProgress,
+    });
+    log(`${label || filter}: ${summary.pass} pass / ${summary.fail} fail`);
+    toast(summary.fail ? `${summary.fail} failures` : 'Done');
+  } catch (error) {
+    log('test error: ' + (error?.message ?? error));
+  } finally {
+    setBusy(false);
+    currentRun = null;
+    await refresh();
+  }
+}
+
+async function testKeyNow(keyId) {
+  setBusy(true);
+  currentRun = engine.createRun();
+  log('— testing key —');
+  try {
+    const result = await engine.testKey({ keyId, run: currentRun, onProgress });
+    toast(result.ok ? 'Key works' : 'Key failed');
+    log(`key test: ${result.ok ? 'ok' : 'failed'}`);
+  } catch (error) {
+    log('test error: ' + (error?.message ?? error));
+  } finally {
+    setBusy(false);
+    currentRun = null;
+    await refresh();
+  }
+}
+
 async function testAll() {
   setBusy(true);
   currentRun = engine.createRun();
@@ -375,7 +450,13 @@ async function testAll() {
       run: currentRun,
       onProgress,
     });
-    log(`test all: ${summary.pass} pass / ${summary.fail} fail / ${summary.skipped} skipped`);
+    log(
+      `test all: ${summary.pass} pass / ${summary.fail} fail / ` +
+        `${summary.skipped} skipped / ${summary.orphaned ?? 0} orphaned`
+    );
+    if (summary.orphaned) {
+      toast(`${summary.orphaned} orphaned mapping(s) — re-import to repair`);
+    }
     toast(summary.fail ? `Done with ${summary.fail} failures` : 'All healthy');
   } catch (error) {
     log('test error: ' + (error?.message ?? error));
@@ -421,6 +502,8 @@ async function importFile(file) {
 
 $('btnAnalyze').addEventListener('click', analyze);
 $('btnTestAll').addEventListener('click', testAll);
+$('btnRetry').addEventListener('click', () => testFiltered('failed'));
+$('btnTestHealthy').addEventListener('click', () => testFiltered(STATUS.HEALTHY));
 $('btnCancel').addEventListener('click', () => {
   currentRun?.cancel();
   toast('Cancelling…');

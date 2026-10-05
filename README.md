@@ -69,7 +69,7 @@ core/
     openai-compatible.js
     http.js
 ui/                    source copy of the UI
-index.html app.js styles.css   deployable root entry points
+index.html app.js styles.css   the UI (deployed from repository root)
 tests/                 harness, mock fetch, cases A-O + security
 ```
 

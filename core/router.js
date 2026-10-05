@@ -1,5 +1,13 @@
 import { STATUS } from './statuses.js';
-import { computeScore, isEligible, isProviderAvailable } from './health.js';
+import {
+  computeScore,
+  isEligible,
+  isProviderAvailable,
+  isRecoverable,
+  needsManualRecheck,
+  refreshBreaker,
+  CIRCUIT_STATE,
+} from './health.js';
 import { nowMs } from './util.js';
 import { getAdapter } from './adapters/openai-compatible.js';
 import { CONFIG } from './config.js';
@@ -25,8 +33,77 @@ export class Router {
     this.registry = registry;
   }
 
+  /**
+   * Auto-recovery sweep (plan 19).
+   *
+   * - A mapping whose cooldown has expired becomes eligible again.
+   * - A transient failure (TEMP_ERROR / PROVIDER_DOWN) is cleared so the
+   *   next attempt can actually retest instead of being stuck forever.
+   * - Terminal states (AUTH_INVALID / EXPIRED / QUOTA_EXHAUSTED) are left
+   *   untouched: they only recheck on a manual action, never automatically.
+   * - An OPEN circuit whose window elapsed moves to HALF_OPEN so exactly one
+   *   probe may be attempted (plan 18).
+   */
+  async recover({ now = nowMs(), persist = true } = {}) {
+    const recovered = { cooldownExpired: 0, transientCleared: 0, halfOpened: 0 };
+
+    for (const mapping of await this.registry.listMappings()) {
+      if (mapping.cooldownUntil && mapping.cooldownUntil <= now && isRecoverable(mapping.status)) {
+        if (!persist) {
+          recovered.cooldownExpired += 1;
+          continue;
+        }
+        await this.registry.updateMapping(mapping.id, { cooldownUntil: null });
+        recovered.cooldownExpired += 1;
+      }
+
+      // Transient failures recover on their own once retested; clearing the
+      // error here keeps a stale 5xx from blocking a healthy provider forever.
+      if (
+        mapping.status === STATUS.TEMP_ERROR &&
+        mapping.lastFailureAt &&
+        now - Date.parse(mapping.lastFailureAt) >= CONFIG.cooldown.tempErrorMaxMs
+      ) {
+        if (!persist) continue;
+        await this.registry.updateMapping(mapping.id, {
+          status: STATUS.DISCOVERED,
+          failureCount: 0,
+          cooldownUntil: null,
+          lastErrorClass: null,
+          lastErrorMessage: null,
+        });
+        recovered.transientCleared += 1;
+      }
+    }
+
+    for (const provider of await this.registry.listProviders()) {
+      if (!provider.breaker) continue;
+      const refreshed = refreshBreaker(provider.breaker, { now });
+      if (refreshed.state !== provider.breaker.state && persist) {
+        await this.registry.storage.put('providers', {
+          ...provider,
+          breaker: refreshed,
+          updatedAt: new Date(now).toISOString(),
+        });
+        recovered.halfOpened += 1;
+      }
+    }
+
+    return recovered;
+  }
+
+  /** True when a mapping should only be rechecked by an explicit user action. */
+  requiresManualRecheck(mapping) {
+    return needsManualRecheck(mapping.status);
+  }
+
   /** Load the full eligible candidate set, scored and sorted. */
   async candidates({ modelId = null, now = nowMs() } = {}) {
+    // Recovery must run here too, not only in pick(): callers that inspect
+    // candidates directly (UI, test engine) must see expired cooldowns
+    // already cleared (plan 19).
+    await this.recover({ now });
+
     const [providers, keys, mappings] = await Promise.all([
       this.registry.listProviders(),
       this.registry.listKeys(),
@@ -46,6 +123,11 @@ export class Router {
       if (modelId && mapping.modelId !== modelId) continue;
       if (!isEligible(mapping, key, { now })) continue;
       if (!isProviderAvailable(provider.breaker, { now })) continue;
+      // HALF_OPEN allows only a single probe; extra concurrent callers are
+      // held back so a recovering provider cannot be stampeded (plan 18).
+      if (provider.breaker?.state === CIRCUIT_STATE.HALF_OPEN) {
+        if ((provider.breaker.halfOpenProbes ?? 0) >= CONFIG.circuit.halfOpenProbes) continue;
+      }
 
       list.push({
         mapping,
@@ -75,6 +157,7 @@ export class Router {
    *   3. provider fallback last
    */
   async pick({ preferredModelId = null, exclude = [], now = nowMs() } = {}) {
+    // candidates() performs the recovery sweep.
     const all = await this.candidates({ now });
     const excluded = new Set(exclude);
 
@@ -111,6 +194,17 @@ export class Router {
       const adapter = getAdapter(candidate.provider.protocol);
       const url = adapter.buildChatUrl(candidate.provider.baseURL);
       const startedAt = Date.now();
+
+      // Claim the half-open probe slot before spending a real request.
+      if (candidate.provider.breaker?.state === CIRCUIT_STATE.HALF_OPEN) {
+        await this.registry.storage.put('providers', {
+          ...candidate.provider,
+          breaker: {
+            ...candidate.provider.breaker,
+            halfOpenProbes: (candidate.provider.breaker.halfOpenProbes ?? 0) + 1,
+          },
+        });
+      }
 
       onEvent?.({ stage: 'attempt', provider: candidate.provider.name, model: candidate.mapping.modelId });
 
