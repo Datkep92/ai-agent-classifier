@@ -23,6 +23,88 @@ const inboxRoot = $('inboxRoot');
 const logRoot = $('logRoot');
 const pasteInput = $('pasteInput');
 
+
+// ------------------------------------------------------------------ i18n
+// Vietnamese labels for statuses and pipeline stages. The core keeps English
+// enum values (they are machine-readable and exported); only display text is
+// translated here.
+const STATUS_VI = {
+  HEALTHY: 'Khỏe',
+  DISCOVERED: 'Đã quét',
+  RATE_LIMITED: 'Bị giới hạn',
+  QUOTA_EXHAUSTED: 'Hết quota',
+  AUTH_INVALID: 'Key sai',
+  EXPIRED: 'Hết hạn',
+  MODEL_DENIED: 'Model bị chặn',
+  PROVIDER_DOWN: 'Server lỗi',
+  TEMP_ERROR: 'Lỗi tạm thời',
+  REQUEST_ERROR: 'Request sai',
+  UNKNOWN_ERROR: 'Lỗi chưa rõ',
+  UNRESOLVED: 'Chưa xác định',
+  DISABLED: 'Đã tắt',
+};
+
+const TYPE_VI = {
+  URL: 'URL',
+  MODEL: 'MODEL',
+  API_KEY: 'KEY',
+  JSON_CONFIG: 'JSON',
+  UNKNOWN: 'CHƯA RÕ',
+  UNKNOWN_TEXT: 'VĂN BẢN CHƯA RÕ',
+};
+
+const STAGE_VI = {
+  provider: 'nhà cung cấp',
+  discovery: 'quét model',
+  connectivity: 'kết nối',
+  inference: 'suy luận',
+  'inference-done': 'xong suy luận',
+  attempt: 'thử',
+  success: 'thành công',
+  failed: 'thất bại',
+  abort: 'dừng',
+  route: 'định tuyến',
+  probe: 'thử',
+};
+
+function statusVi(status) {
+  return STATUS_VI[status] ?? String(status ?? 'Chưa xác định');
+}
+
+function typeVi(type) {
+  return TYPE_VI[type] ?? String(type ?? 'CHƯA RÕ');
+}
+
+function stageVi(stage) {
+  return STAGE_VI[stage] ?? stage;
+}
+
+// Reasons attached to Unresolved items by the core. Translating them keeps
+// the inbox readable without changing the stored English reason text.
+const REASON_VI = {
+  'no provider yet': 'chưa có nhà cung cấp nào',
+  'no token was classifiable; original text kept verbatim':
+    'không phân loại được token nào; giữ nguyên văn bản gốc',
+  'nothing classifiable in input': 'không có gì phân loại được',
+  'no confident match': 'không khớp mẫu nào',
+  'url shape': 'có dạng URL',
+  'known key prefix': 'có tiền tố key quen thuộc',
+  'high-entropy opaque token': 'token trùng phân cấp cao',
+  'model id shape': 'có dạng model id',
+  'valid json object/array': 'JSON hợp lệ',
+  'no provider accepted this key yet': 'chưa nhà cung cấp nào chấp nhận key này',
+  'not listed by any provider; probe did not confirm':
+    'không provider nào liệt kê; thử suy luận không xác nhận được',
+  'waiting for provider': 'đang chờ nhà cung cấp',
+};
+
+function reasonVi(reason) {
+  if (!reason) return null;
+  if (REASON_VI[reason]) return REASON_VI[reason];
+  // Preserve dynamic reasons such as "json key \"baseUrl\"" verbatim.
+  return reason;
+}
+
 // ----------------------------------------------------------------- helpers
 
 function log(message) {
@@ -73,7 +155,7 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
   if (!providers.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
-    empty.textContent = 'No providers yet. Paste a URL, model or key above.';
+    empty.textContent = 'Chưa có nhà cung cấp nào. Hãy dán URL, model hoặc key ở trên.';
     treeRoot.append(empty);
     return;
   }
@@ -104,7 +186,7 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
 
     const test = document.createElement('button');
     test.className = 'small';
-    test.textContent = 'Test';
+    test.textContent = 'Kiểm tra';
     test.addEventListener('click', (event) => {
       event.stopPropagation();
       testProvider(provider);
@@ -119,7 +201,7 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
     if (!models.length) {
       const empty = document.createElement('div');
       empty.className = 'empty';
-      empty.textContent = 'No models discovered yet.';
+      empty.textContent = 'Chưa phát hiện model nào.';
       children.append(empty);
     }
 
@@ -154,7 +236,7 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
       if (!modelMappings.length) {
         const empty = document.createElement('div');
         empty.className = 'empty';
-        empty.textContent = 'No key mapped.';
+        empty.textContent = 'Chưa gán key nào.';
         modelChildren.append(empty);
       }
 
@@ -178,14 +260,14 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
           ? cool
           : mapping.latencyMs != null
             ? mapping.latencyMs + 'ms'
-            : statusMeta(mapping.status).label;
-        if (cool) pill.title = 'cooldown remaining';
+            : statusVi(mapping.status);
+        if (cool) pill.title = 'thời gian chờ còn lại';
 
         // TEST KEY (plan 20) plus a targeted Retry for this mapping only.
         const retry = document.createElement('button');
         retry.className = 'small';
         retry.textContent = '⟳';
-        retry.title = 'Retry this mapping';
+        retry.title = 'Thử lại mapping này';
         retry.addEventListener('click', (event) => {
           event.stopPropagation();
           retryMapping(mapping, provider, key, model);
@@ -203,7 +285,7 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
         const testKeyBtn = document.createElement('button');
         testKeyBtn.className = 'small';
         testKeyBtn.textContent = 'T';
-        testKeyBtn.title = 'Test this key against all its mappings';
+        testKeyBtn.title = 'Kiểm tra key này với toàn bộ mapping';
         testKeyBtn.addEventListener('click', (event) => {
           event.stopPropagation();
           testKeyNow(key.id);
@@ -211,11 +293,11 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
 
         const toggle = document.createElement('button');
         toggle.className = 'small';
-        toggle.textContent = key?.enabled ? 'On' : 'Off';
+        toggle.textContent = key?.enabled ? 'Bật' : 'Tắt';
         toggle.addEventListener('click', async (event) => {
           event.stopPropagation();
           await registry.setKeyEnabled(key.id, !key.enabled);
-          toast(key.enabled ? 'Key disabled' : 'Key enabled');
+          toast(key.enabled ? 'Đã tắt key' : 'Đã bật key');
           await refresh();
         });
 
@@ -247,7 +329,7 @@ function renderInbox(items) {
   if (!items.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
-    empty.textContent = 'Inbox is empty.';
+    empty.textContent = 'Hộp thư đang trống.';
     inboxRoot.append(empty);
     return;
   }
@@ -258,7 +340,7 @@ function renderInbox(items) {
 
     const type = document.createElement('div');
     type.className = 'pill';
-    type.textContent = item.detectedType;
+    type.textContent = typeVi(item.detectedType);
 
     const raw = document.createElement('div');
     raw.className = 'raw';
@@ -267,7 +349,7 @@ function renderInbox(items) {
     const meta = document.createElement('div');
     meta.className = 'meta';
     meta.textContent =
-      (item.meta?.reason ?? 'waiting') +
+      (reasonVi(item.meta?.reason) ?? 'đang chờ') +
       (item.candidates?.length ? ' · candidates: ' + item.candidates.join(', ') : '');
 
     box.append(type, raw, meta);
@@ -279,7 +361,7 @@ function showError(mapping) {
   $('errText').textContent =
     mapping.lastErrorClass
       ? mapping.lastErrorClass + '\n\n' + (mapping.lastErrorMessage ?? '(no message)')
-      : 'No error recorded for this mapping.';
+      : 'Mapping này chưa ghi nhận lỗi nào.';
   $('errDialog').showModal();
 }
 
@@ -334,13 +416,13 @@ function onProgress(event) {
 async function analyze() {
   const raw = pasteInput.value.trim();
   if (!raw) {
-    toast('Paste something first');
+    toast('Hãy dán nội dung trước đã');
     return;
   }
 
   setBusy(true);
   currentRun = engine.createRun();
-  log('— analyzing paste —');
+  log('— đang phân tích nội dung dán —');
 
   try {
     const report = await importPaste({
@@ -350,14 +432,14 @@ async function analyze() {
       onProgress,
     });
     log(
-      `import done: ${report.providersCount ?? 0} providers, ` +
-        `${report.mappingsCount ?? 0} mappings, ${report.unresolved.length} unresolved`
+      `đã nhập: ${report.providersCount ?? 0} nhà cung cấp, ` +
+        `${report.mappingsCount ?? 0} mapping, ${report.unresolved.length} chưa xác định`
     );
     pasteInput.value = '';
-    toast('Import complete');
+    toast('Đã nhập xong');
   } catch (error) {
-    log('import error: ' + (error?.message ?? error));
-    toast('Import failed');
+    log('lỗi nhập: ' + (error?.message ?? error));
+    toast('Nhập thất bại');
   } finally {
     setBusy(false);
     currentRun = null;
@@ -368,16 +450,16 @@ async function analyze() {
 async function testProvider(provider) {
   setBusy(true);
   currentRun = engine.createRun();
-  log('— testing ' + provider.name + ' —');
+  log('— đang kiểm tra ' + provider.name + ' —');
   try {
     const result = await engine.testProvider({
       providerId: provider.id,
       run: currentRun,
       onProgress,
     });
-    log(`test ${provider.name}: ${result.pass ?? 0} pass / ${result.fail ?? 0} fail`);
+    log(`kiểm tra ${provider.name}: ${result.pass ?? 0} đạt / ${result.fail ?? 0} lỗi`);
   } catch (error) {
-    log('test error: ' + (error?.message ?? error));
+    log('lỗi kiểm tra: ' + (error?.message ?? error));
   } finally {
     setBusy(false);
     currentRun = null;
@@ -388,13 +470,13 @@ async function testProvider(provider) {
 async function retryMapping(mapping, provider, key, model) {
   setBusy(true);
   currentRun = engine.createRun();
-  log(`— retry ${provider.name}/${model.modelId} —`);
+  log(`— thử lại ${provider.name}/${model.modelId} —`);
   try {
     const { probeMapping } = await import('./core/probe.js');
     const result = await probeMapping({ registry, mapping, provider, model, key });
-    toast(result.ok ? 'Recovered' : result.classification.status);
+    toast(result.ok ? 'Đã khỏi' : result.classification.status);
   } catch (error) {
-    log('retry error: ' + (error?.message ?? error));
+    log('lỗi thử lại: ' + (error?.message ?? error));
   } finally {
     setBusy(false);
     currentRun = null;
@@ -413,9 +495,9 @@ async function testFiltered(filter, label) {
       onProgress,
     });
     log(`${label || filter}: ${summary.pass} pass / ${summary.fail} fail`);
-    toast(summary.fail ? `${summary.fail} failures` : 'Done');
+    toast(summary.fail ? `${summary.fail} lỗi` : 'Xong');
   } catch (error) {
-    log('test error: ' + (error?.message ?? error));
+    log('lỗi kiểm tra: ' + (error?.message ?? error));
   } finally {
     setBusy(false);
     currentRun = null;
@@ -426,13 +508,13 @@ async function testFiltered(filter, label) {
 async function testKeyNow(keyId) {
   setBusy(true);
   currentRun = engine.createRun();
-  log('— testing key —');
+  log('— đang kiểm tra key —');
   try {
     const result = await engine.testKey({ keyId, run: currentRun, onProgress });
-    toast(result.ok ? 'Key works' : 'Key failed');
-    log(`key test: ${result.ok ? 'ok' : 'failed'}`);
+    toast(result.ok ? 'Key hoạt động' : 'Key lỗi');
+    log(`kiểm tra key: ${result.ok ? 'đạt' : 'lỗi'}`);
   } catch (error) {
-    log('test error: ' + (error?.message ?? error));
+    log('lỗi kiểm tra: ' + (error?.message ?? error));
   } finally {
     setBusy(false);
     currentRun = null;
@@ -443,7 +525,7 @@ async function testKeyNow(keyId) {
 async function testAll() {
   setBusy(true);
   currentRun = engine.createRun();
-  log('— test all —');
+  log('— kiểm tra tất cả —');
   try {
     const summary = await engine.testAll({
       filter: 'all',
@@ -451,15 +533,15 @@ async function testAll() {
       onProgress,
     });
     log(
-      `test all: ${summary.pass} pass / ${summary.fail} fail / ` +
-        `${summary.skipped} skipped / ${summary.orphaned ?? 0} orphaned`
+      `kiểm tra tất cả: ${summary.pass} đạt / ${summary.fail} lỗi / ` +
+        `${summary.skipped} bỏ qua / ${summary.orphaned ?? 0} mồ côi`
     );
     if (summary.orphaned) {
-      toast(`${summary.orphaned} orphaned mapping(s) — re-import to repair`);
+      toast(`${summary.orphaned} mapping mồ côi — nhập lại để sửa`);
     }
-    toast(summary.fail ? `Done with ${summary.fail} failures` : 'All healthy');
+    toast(summary.fail ? `Xong, còn ${summary.fail} lỗi` : 'Tất cả khỏe');
   } catch (error) {
-    log('test error: ' + (error?.message ?? error));
+    log('lỗi kiểm tra: ' + (error?.message ?? error));
   } finally {
     setBusy(false);
     currentRun = null;
@@ -477,7 +559,7 @@ async function exportJson() {
   a.download = 'smart-api-registry.json';
   a.click();
   URL.revokeObjectURL(url);
-  toast('Exported (secrets excluded)');
+  toast('Đã xuất (không kèm secret)');
 }
 
 async function importFile(file) {
@@ -486,13 +568,13 @@ async function importFile(file) {
     const payload = JSON.parse(text);
     const result = await registry.importAll(payload);
     log(
-      `imported: ${result.providers} providers, ${result.models} models, ` +
-        `${result.keys} keys, ${result.mappings} mappings`
+      `đã nhập: ${result.providers} nhà cung cấp, ${result.models} model, ` +
+        `${result.keys} key, ${result.mappings} mapping`
     );
-    toast('Imported');
+    toast('Đã nhập');
   } catch (error) {
-    log('import file error: ' + (error?.message ?? error));
-    toast('Import failed');
+    log('lỗi nhập tệp: ' + (error?.message ?? error));
+    toast('Nhập thất bại');
   } finally {
     await refresh();
   }
@@ -506,7 +588,7 @@ $('btnRetry').addEventListener('click', () => testFiltered('failed'));
 $('btnTestHealthy').addEventListener('click', () => testFiltered(STATUS.HEALTHY));
 $('btnCancel').addEventListener('click', () => {
   currentRun?.cancel();
-  toast('Cancelling…');
+  toast('Đang huỷ…');
 });
 $('btnExport').addEventListener('click', exportJson);
 $('btnImportFile').addEventListener('click', () => $('fileInput').click());

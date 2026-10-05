@@ -221,3 +221,65 @@ npm start
 Open the deployed site on a phone and paste one real provider to
 confirm the CORS behaviour, then add a proxy only if a call fails.
 ==================================================
+
+==================================================
+UPDATE 2026-10-05 23:32:46 --- KEY AUTO-MAP FIX + VIETNAMESE UI
+Status: PASS
+
+1. BUG REPORTED AND FIXED
+Symptom: pasting a key produced no tree at all. The key stayed in
+Unresolved and never appeared under the provider.
+
+Root cause: resolveUnresolved() only handled MODEL items. Every
+API_KEY item hit an early `kept.push(item); continue;` and was never
+retried, so a key pasted before its provider could never bind to it.
+
+Fixes in core/mapper.js:
+- API_KEY items are now scanned against every known provider.
+- A cheap discovery call authenticates the key before any inference
+  request is spent.
+- A key rejected by one provider is retried against the next instead of
+  being declared dead, because AUTH_INVALID is only valid for that
+  provider.
+- A key that authenticates but advertises no models is still attached
+  to the provider (AUTH_OK_NO_MODELS) so it is visible in the tree.
+- A model that no provider advertises is now probed directly instead of
+  being discarded: not being listed is not proof of being unusable.
+  Only a real inference PASS resolves it.
+- Unresolved items updated during resolution are now persisted. Before
+  this, the UI kept rendering the original parked hint, so the inbox
+  showed "OpenCode" forever instead of the actual verdict.
+
+2. VIETNAMESE UI
+- index.html: all labels, buttons, headings and the banner.
+- app.js: status names, item types, pipeline stage names, Unresolved
+  reasons, all toasts, log lines and tooltips.
+- The core still emits English enum values because they are exported
+  and machine-readable; only display text is translated.
+
+3. TEST RESULTS
+- command: npm test
+- result: 49 tests, 49 passed, 0 failed
+- new suite K (5 cases) pins the auto-map behaviour:
+  K1 key first then provider -> mapped and verified
+  K2 model first then key -> mapped and verified
+  K3 key rejected everywhere -> stays Unresolved WITH the reason
+  K4 key rejected by provider A, accepted by provider B -> maps to B
+  K5 tree fully populated, every model has a healthy mapping
+
+4. VERIFIED
+- End-to-end with mocks: key pasted alone, then URL alone, produces a
+  populated tree: provider > 3 models > masked key, all HEALTHY and
+  verified, Unresolved empty.
+- Served over HTTP: Vietnamese title, all 7 Vietnamese buttons, and
+  zero English UI strings remain.
+- No English left in the UI apart from technical identifiers such as
+  listUnresolved() and element ids, which are not user-visible.
+
+5. HOW TO RUN
+npm test
+npm start
+
+6. NEXT RECOMMENDED STEP
+Open the site on a phone and paste a real key to confirm it maps.
+==================================================

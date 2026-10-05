@@ -1,79 +1,74 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#0b0f14" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<title>AI API Manager</title>
+<title>Quản Lý API AI</title>
 <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
 <header class="app">
-  <h1>AI API MANAGER</h1>
-  <div class="sub">Paste anything &mdash; registry, discovery, routing</div>
+  <h1>QUẢN LÝ API AI</h1>
+  <div class="sub">Dán bất kỳ thứ gì &mdash; tự nhận diện, quét, định tuyến</div>
 </header>
 
 <main>
-  <!-- Smart Paste (plan 5, 21) -->
   <section class="paste-card">
-    <label for="pasteInput">Paste URL / model / API key / JSON / mixed text</label>
+    <label for="pasteInput">Dán URL / model / API key / JSON / văn bản lẫn lộn</label>
     <textarea id="pasteInput" placeholder="https://opencode.ai/zen/v1
 model: space-bunny-free
 sk-..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
     <div class="actions">
-      <button id="btnAnalyze" class="primary">ANALYZE + IMPORT</button>
-      <button id="btnTestAll">TEST ALL</button>
+      <button id="btnAnalyze" class="primary">PHÂN TÍCH + NHẬP</button>
+      <button id="btnTestAll">KIỂM TRA TẤT CẢ</button>
     </div>
     <div class="actions">
-      <button id="btnRetry" class="small">Retry failed</button>
-      <button id="btnTestHealthy" class="small">Re-test healthy</button>
-      <button id="btnCancel" class="small danger" hidden>Cancel</button>
+      <button id="btnRetry" class="small">Thử lại lỗi</button>
+      <button id="btnTestHealthy" class="small">Kiểm tra lại khỏe</button>
+      <button id="btnCancel" class="small danger" hidden>Huỷ</button>
     </div>
     <div class="actions">
-      <button id="btnExport" class="small">Export</button>
-      <button id="btnImportFile" class="small">Import</button>
+      <button id="btnExport" class="small">Xuất</button>
+      <button id="btnImportFile" class="small">Nhập</button>
     </div>
   </section>
 
   <div id="corsBanner" class="banner" hidden>
-    Some providers block cross-origin requests from this page. If testing fails,
-    open the app through the bundled local server instead of double-clicking the file.
+    Một số nhà cung cấp chặn request chéo từ trang này. Nếu kiểm tra bị lỗi,
+    hãy mở ứng dụng qua máy chủ cục bộ thay vì mở trực tiếp tệp.
   </div>
 
-  <!-- Summary (plan 21) -->
   <section class="summary">
-    <div class="stat ok"><div class="n" id="sHealthy">0</div><div class="l">Healthy</div></div>
-    <div class="stat warn"><div class="n" id="sCool">0</div><div class="l">Cooldown</div></div>
-    <div class="stat pur"><div class="n" id="sQuota">0</div><div class="l">Quota</div></div>
-    <div class="stat bad"><div class="n" id="sInvalid">0</div><div class="l">Invalid</div></div>
-    <div class="stat unk"><div class="n" id="sUnresolved">0</div><div class="l">Unresolved</div></div>
+    <div class="stat ok"><div class="n" id="sHealthy">0</div><div class="l">Khỏe</div></div>
+    <div class="stat warn"><div class="n" id="sCool">0</div><div class="l">Chờ</div></div>
+    <div class="stat pur"><div class="n" id="sQuota">0</div><div class="l">Hết quota</div></div>
+    <div class="stat bad"><div class="n" id="sInvalid">0</div><div class="l">Hỏng</div></div>
+    <div class="stat unk"><div class="n" id="sUnresolved">0</div><div class="l">Chưa rõ</div></div>
   </section>
 
-  <!-- Provider / Model / Key tree (plan 21) -->
   <section class="tree">
-    <h2>Registry</h2>
+    <h2>Danh mục</h2>
     <div id="treeRoot"></div>
   </section>
 
-  <!-- Unresolved inbox (plan 23) -->
   <section class="inbox">
-    <h2>&#10067; Unresolved</h2>
+    <h2>&#10067; Chưa xác định</h2>
     <div id="inboxRoot"></div>
   </section>
 
-  <!-- Activity log (plan 31) -->
   <section>
-    <h2 style="font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin:14px 0 6px;">Activity</h2>
+    <h2 style="font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin:14px 0 6px;">Hoạt động</h2>
     <div class="log" id="logRoot"></div>
   </section>
 </main>
 
 <dialog id="errDialog">
-  <h3 style="margin:0 0 8px;font-size:15px;">Error detail</h3>
+  <h3 style="margin:0 0 8px;font-size:15px;">Chi tiết lỗi</h3>
   <div class="err" id="errText"></div>
-  <div class="actions"><button id="errClose" class="small">Close</button></div>
+  <div class="actions"><button id="errClose" class="small">Đóng</button></div>
 </dialog>
 
 <div class="toast" id="toast"></div>

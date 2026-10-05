@@ -1,6 +1,7 @@
 import { CONFIG } from './config.js';
 import { STATUS } from './statuses.js';
 import { modelsLooselyMatch } from './normalizer.js';
+import { getAdapter } from './adapters/openai-compatible.js';
 
 /**
  * Auto-map (§24).
@@ -82,6 +83,48 @@ export async function mapKeyToProvider({
 }
 
 /**
+ * Try a model that no provider advertises by probing it directly.
+ * Only a real inference PASS resolves the item (plan 7, 24).
+ */
+async function probeUnknownModel({ registry, item, providers, probe }) {
+  const attempted = [];
+
+  for (const provider of providers) {
+    const keys = await registry.listKeys(provider.id);
+    if (!keys.length) continue;
+
+    const { model } = await registry.upsertModel({
+      providerId: provider.id,
+      modelId: item.raw,
+      source: 'pasted',
+    });
+
+    let anyPass = false;
+    for (const key of keys) {
+      const { mapping } = await registry.upsertMapping({
+        providerId: provider.id,
+        modelId: item.raw,
+        keyId: key.id,
+        status: STATUS.UNRESOLVED,
+      });
+
+      if (!probe) {
+        anyPass = false;
+        continue;
+      }
+
+      const result = await probe({ registry, mapping, provider, model, key });
+      if (result.ok) anyPass = true;
+    }
+
+    attempted.push(`${provider.name}:${anyPass ? 'VERIFIED' : 'NOT_AVAILABLE'}`);
+    if (anyPass) return { resolved: true, provider, model };
+  }
+
+  return { resolved: false, attempted };
+}
+
+/**
  * Resolve Unresolved inbox items against current registry data (§23).
  * Runs whenever new registry data arrives.
  */
@@ -92,6 +135,85 @@ export async function resolveUnresolved({ registry, probe, log }) {
   const kept = [];
 
   for (const item of items) {
+    if (item.detectedType === 'API_KEY') {
+      // A key that arrived before its provider is parked here. Now that
+      // providers exist, try the key against each one and keep only real
+      // evidence (plan 7, 23): a key prefix hint alone never counts, and an
+      // ambiguous result stays Unresolved rather than being guessed.
+      const attempted = [];
+      let verifiedAny = false;
+
+      for (const provider of providers) {
+        // A provider with no discovered models can still accept the key, so
+        // we attempt discovery here regardless and record the verdict.
+        const models = await registry.listModels(provider.id);
+
+        // Cheap pre-check: discovery must authenticate before we spend
+        // inference requests on every model.
+        const modelsProbe = await getAdapter(provider.protocol).discoverModels({
+          baseURL: provider.baseURL,
+          secret: item.raw,
+          timeoutMs: CONFIG.discoveryTimeoutMs,
+        });
+
+        if (!modelsProbe.ok) {
+          attempted.push({
+            provider: provider.name,
+            result: modelsProbe.classification?.status ?? 'UNKNOWN',
+          });
+          // AUTH_INVALID / EXPIRED / QUOTA are key-scoped verdicts about
+          // this secret, but a different provider may still accept it, so
+          // we keep scanning rather than concluding here.
+          continue;
+        }
+
+        const { key } = await registry.upsertKey({
+          providerId: provider.id,
+          secret: item.raw,
+        });
+
+        if (!models.length) {
+          // Authenticated but advertises nothing: the key is valid and now
+          // visible in the tree, but we cannot verify a model against it.
+          attempted.push({ provider: provider.name, result: 'AUTH_OK_NO_MODELS' });
+          verifiedAny = true;
+          break;
+        }
+
+        const results = await mapKeyToProvider({
+          registry,
+          provider,
+          key,
+          probe: probe ? (args) => probe(args) : null,
+        });
+
+        const passed = results.some((r) => r.ok);
+        attempted.push({ provider: provider.name, result: passed ? 'VERIFIED' : 'LISTED_ONLY' });
+
+        if (passed) {
+          verifiedAny = true;
+          break;
+        }
+      }
+
+      if (verifiedAny) {
+        await registry.removeUnresolved(item.id);
+        resolved.push({ raw: item.raw.slice(0, 8), type: 'API_KEY', verified: true });
+      } else {
+        // Replace the parked prefix hint with what we actually observed and
+        // persist it, otherwise the UI keeps showing the original guess.
+        const updated = {
+          ...item,
+          candidates: attempted.map((a) => `${a.provider}:${a.result}`),
+          meta: { ...item.meta, reason: 'no provider accepted this key yet' },
+        };
+        await registry.storage.put('unresolved', updated);
+        kept.push(updated);
+        log?.('key could not be mapped: ' + attempted.map((a) => a.provider + '=' + a.result).join(', '));
+      }
+      continue;
+    }
+
     if (item.detectedType !== 'MODEL') {
       kept.push(item);
       continue;
@@ -107,7 +229,29 @@ export async function resolveUnresolved({ registry, probe, log }) {
     }
 
     if (hits.length === 0) {
-      kept.push(item);
+      // Not listed by /models, but that is not proof the model is unusable.
+      // A provider may serve models it does not advertise, so we attempt a
+      // real inference probe on each provider that has a key (plan 7).
+      // Inference PASS is the strongest evidence in the system (plan 24);
+      // anything weaker stays Unresolved rather than being guessed.
+      const probed = await probeUnknownModel({ registry, item, providers, probe });
+      if (probed.resolved) {
+        await registry.removeUnresolved(item.id);
+        resolved.push({
+          raw: item.raw,
+          provider: probed.provider.name,
+          model: item.raw,
+          via: 'probe',
+        });
+      } else {
+        const updated = {
+          ...item,
+          candidates: probed.attempted,
+          meta: { ...item.meta, reason: 'not listed by any provider; probe did not confirm' },
+        };
+        await registry.storage.put('unresolved', updated);
+        kept.push(updated);
+      }
       continue;
     }
 
@@ -117,10 +261,12 @@ export async function resolveUnresolved({ registry, probe, log }) {
 
     // A tie on weak evidence stays unresolved — never guess (§23, §35).
     if (tied && top.strength !== EXACT) {
-      kept.push({
+      const updated = {
         ...item,
         candidates: hits.map((h) => `${h.provider.name}/${h.model.modelId}`),
-      });
+      };
+      await registry.storage.put('unresolved', updated);
+      kept.push(updated);
       log?.(`tie for model "${item.raw}" — keeping unresolved`);
       continue;
     }
