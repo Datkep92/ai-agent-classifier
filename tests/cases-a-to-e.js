@@ -8,6 +8,9 @@ import { normalizeBaseURL } from '../core/normalizer.js';
 
 const OK_MODELS = { body: { data: [{ id: 'gpt-4o' }, { id: 'fledge-alpha-free' }, { id: 'nemotron-free' }] } };
 const OK_CHAT = { body: { choices: [{ message: { content: 'OK' } }] } };
+
+// Synthetic test fixtures. These are NOT real credentials: no network call
+// is ever made with them (tests/mock-fetch.js intercepts every request).
 const KEY_A = 'oc_sk_A1b2C3d4E5f6G7h8I9j0';
 const KEY_B = 'oc_sk_Z9y8X7w6V5u4T3s2R1q0';
 
