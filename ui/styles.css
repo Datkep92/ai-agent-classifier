@@ -1,0 +1,228 @@
+
+/* Mobile-first. Designed for Safari/iPhone, not a shrunken desktop UI (plan 21). */
+:root {
+  --bg: #0b0f14;
+  --surface: #131a22;
+  --surface-2: #1a2430;
+  --border: #243040;
+  --text: #e8eef5;
+  --muted: #8b9bb0;
+  --accent: #4f8cff;
+  --ok: #22c39a;
+  --warn: #f5a524;
+  --danger: #ff6b6b;
+  --purple: #b57bff;
+  --radius: 12px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+  overscroll-behavior-y: none;
+}
+
+body { padding-bottom: calc(24px + var(--safe-b)); }
+
+header.app {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(11, 15, 20, 0.92);
+  backdrop-filter: saturate(160%) blur(12px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 14px 10px;
+}
+header.app h1 {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: 0.4px;
+  font-weight: 650;
+}
+header.app .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+main { padding: 12px 14px 8px; }
+
+/* ---------------------------------------------------------------- paste box */
+.paste-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+.paste-card label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+#pasteInput {
+  width: 100%;
+  min-height: 108px;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+#pasteInput:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.actions { display: flex; gap: 8px; margin-top: 10px; }
+button {
+  flex: 1;
+  min-height: 46px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:active { transform: translateY(1px); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { color: var(--danger); }
+button[disabled] { opacity: 0.5; }
+button.small { min-height: 34px; font-size: 12px; padding: 0 10px; flex: 0 0 auto; }
+
+/* ----------------------------------------------------------------- summary */
+.summary {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin: 12px 0 4px;
+}
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 4px;
+  text-align: center;
+}
+.stat .n { font-size: 17px; font-weight: 700; }
+.stat .l { font-size: 10px; color: var(--muted); margin-top: 2px; }
+.stat.ok .n { color: var(--ok); }
+.stat.warn .n { color: var(--warn); }
+.stat.bad .n { color: var(--danger); }
+.stat.pur .n { color: var(--purple); }
+.stat.unk .n { color: var(--muted); }
+
+/* -------------------------------------------------------------------- tree */
+.tree { margin-top: 10px; }
+.node { border-bottom: 1px solid var(--border); }
+.node > .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 2px;
+  cursor: pointer;
+}
+.node .caret { width: 14px; color: var(--muted); font-size: 11px; }
+.node .name { flex: 1; min-width: 0; }
+.node .name b { font-weight: 600; }
+.node .sub { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.badge { font-size: 13px; }
+.pill {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.pill.cool { color: var(--warn); border-color: var(--warn); }
+.pill.ok { color: var(--ok); border-color: var(--ok); }
+.pill.bad { color: var(--danger); border-color: var(--danger); }
+
+.children { padding: 0 0 8px 18px; display: none; }
+.node.open > .children { display: block; }
+.leaf {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 5px 2px;
+  border-top: 1px dashed var(--border);
+}
+.leaf .k { flex: 1; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.leaf .lat { color: var(--muted); font-size: 11px; }
+
+/* -------------------------------------------------------------- unresolved */
+.inbox { margin-top: 14px; }
+.inbox h2, .tree h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; margin: 0 0 6px; }
+.inbox .item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 6px;
+}
+.inbox .item .raw {
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.inbox .item .meta { color: var(--muted); font-size: 11px; margin-top: 3px; }
+
+.empty { color: var(--muted); font-size: 13px; padding: 10px 2px; }
+
+/* ------------------------------------------------------------------- misc */
+.log {
+  margin-top: 14px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+}
+.log div { padding: 1px 0; border-bottom: 1px solid rgba(255,255,255,0.03); }
+
+dialog {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  padding: 16px;
+  max-width: 92vw;
+}
+dialog::backdrop { background: rgba(0,0,0,0.6); }
+dialog .err { font: 12px/1.5 ui-monospace, Menlo, monospace; overflow-wrap: anywhere; color: var(--danger); }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(18px + var(--safe-b));
+  transform: translateX(-50%);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  max-width: 90vw;
+  z-index: 50;
+  display: none;
+}
+.toast.show { display: block; }
+
+.banner {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  font-size: 12px;
+}
+.banner[hidden] { display: none; }

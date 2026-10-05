@@ -1,0 +1,15 @@
+{
+  "name": "smart-ai-api-registry",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Smart AI API Registry + Router: paste anything, auto-classify, discover, probe, route.",
+  "scripts": {
+    "start": "node scripts/serve.js",
+    "serve": "node scripts/serve.js",
+    "test": "node --no-experimental-fetch tests/run-all.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

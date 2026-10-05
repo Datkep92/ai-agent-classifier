@@ -1,0 +1,130 @@
+==================================================
+SMART AI API MANAGER - IMPLEMENTATION REPORT
+Time: 2026-10-05 23:11:04
+Status: PASS
+
+1. AUDIT
+- Stack: greenfield project. Node 22, zero runtime dependencies,
+  native ES modules, no build step, no bundler.
+- Existing architecture: none. Only plan(1).md existed at start.
+- Source of truth reused: none required (nothing pre-existing).
+- Runtime note: this jailbroken Node has WebAssembly disabled, so
+  node:http and global fetch crash on undici lazy-load. The bundled
+  static server therefore uses node:net instead. The browser-side
+  core is unaffected.
+
+2. FILES CHANGED
+- index.html
+  - new. Mobile-first shell: paste box, summary, tree, inbox, log.
+- app.js
+  - new. UI wiring only, zero business logic.
+- styles.css
+  - new. Mobile-first styling for Safari/iPhone.
+- core/config.js
+  - new. All tunables: timeouts, scoring weights, evidence weights,
+    circuit breaker, cooldown, recheck policy, storage.
+- core/util.js
+  - new. sha256, secret fingerprint, masking, error sanitizing,
+    bounded-concurrency mapper.
+- core/statuses.js
+  - new. Status enum, rotation-blocking rules, recovery classes.
+- core/error-classifier.js
+  - new. HTTP status + body -> status class. Distinguishes 429 rate
+    limit from quota exhaustion; separates model-denied from key-dead.
+- core/normalizer.js
+  - new. URL normalization: /v1/v1, //chat/completions, trailing
+    slash, default ports, dedupe identities.
+- core/classifier.js
+  - new. URL / MODEL / API_KEY / JSON_CONFIG / UNKNOWN with confidence.
+- core/ingest.js
+  - new. Smart paste parser: JSON, labelled lines, loose tokens.
+- core/storage.js
+  - new. Storage interface with IndexedDB and in-memory drivers.
+- core/registry.js
+  - new. Providers / models / keys / mappings / unresolved / events,
+    plus import-export.
+- core/adapters/http.js
+  - new. Timeout + latency wrapper around fetch.
+- core/adapters/openai-compatible.js
+  - new. GET /models, POST /chat/completions, adapter registry.
+- core/discovery.js
+  - new. Discovery service. Never kills a key on failure.
+- core/probe.js
+  - new. Inference probe, the highest-confidence evidence.
+- core/mapper.js
+  - new. Evidence-based auto-map and unresolved resolver.
+- core/health.js
+  - new. Deterministic score, cooldown backoff, circuit breaker,
+    recovery eligibility.
+- core/router.js
+  - new. KEY -> MODEL -> PROVIDER rotation with fallback.
+- core/test-engine.js
+  - new. TEST KEY/MODEL/PROVIDER/ALL, concurrency, progress, cancel.
+- core/pipeline.js
+  - new. Paste -> classify -> registry -> discovery -> probe -> map.
+- scripts/serve.js
+  - new. Static server on node:net (avoids the WebAssembly crash).
+- tests/
+  - new. harness, mock fetch, 15 mandatory cases + 9 security checks.
+- ui/
+  - source copy of the UI files.
+
+3. IMPLEMENTED
+[PASS] Smart Paste (URL / model / key / JSON / mixed)
+[PASS] Classifier with confidence
+[PASS] URL normalization
+[PASS] Registry with dedupe
+[PASS] Key fingerprint + masking
+[PASS] Discovery (GET /models)
+[PASS] Inference probe (POST /chat/completions)
+[PASS] Auto-map by evidence
+[PASS] Unresolved inbox
+[PASS] Error classifier
+[PASS] Statuses + health scoring
+[PASS] Cooldown with Retry-After
+[PASS] Circuit breaker
+[PASS] Router KEY -> MODEL -> PROVIDER
+[PASS] Test engine
+[PASS] Import / export
+[PASS] Mobile-first UI
+
+4. ROUTER
+- Rotation order: KEY -> MODEL -> PROVIDER
+- Cooldown: Retry-After first, else bounded exponential backoff
+- Circuit breaker: 5 provider failures / 60s -> OPEN 120s -> HALF_OPEN
+
+5. TEST RESULTS
+- command: npm test
+- result: 31 tests, 31 passed, 0 failed
+- coverage: mandatory plan cases A-O plus 9 security/invariant checks
+- network: fully mocked, no real API calls
+
+6. MANUAL TEST
+- Static server started on port 8791
+- Verified HTTP 200 for /, /index.html, /app.js, /styles.css,
+  /core/*.js and /core/adapters/*.js
+- Verified all ES module imports resolve over HTTP
+- UI DOM render not visually verified (no browser in this environment)
+
+7. KNOWN ISSUES
+- Real provider calls require an origin the provider allows. GitHub
+  Pages may be rejected by some providers due to CORS. A local server
+  or a small proxy avoids this.
+- The jailbroken Node runtime cannot run node:http or global fetch
+  because WebAssembly is disabled. Browser use is unaffected.
+- No browser was available here, so the UI was verified by serving
+  assets and checking module resolution, not by visual render.
+
+8. HOW TO RUN
+npm install
+npm test
+npm start
+
+9. HOW TO OPEN
+Local:   http://localhost:8787
+Phone:   http://<your-lan-ip>:8787
+
+10. NEXT RECOMMENDED STEP
+Enable GitHub Pages on the repository and test a real provider from
+the phone. If CORS blocks a provider, add a tiny proxy endpoint.
+==================================================
