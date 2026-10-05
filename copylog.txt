@@ -529,3 +529,85 @@ The classifier benchmark is unchanged and repeatable at 45/71. It is
 the one open known defect, and it can now be worked on with a
 repeatable score and a passing 87-test safety net.
 ==================================================
+
+==================================================
+COP YLOG - CLASSIFIER: STRUCTURAL MODEL vs KEY
+Date: 2026-10-06
+==================================================
+
+1. THE ASK
+"them them logic loai tru so sanh cau truc api voi model la dc"
+-> Add a structural discriminator so API keys and model ids are told
+   apart by SHAPE, not by keyword list. The open defect was 18/44 models
+   correctly classified.
+
+2. METHOD: MEASURE FIRST, THEN RULE
+I profiled every corpus value on structural features before writing any
+code: segment count, alphabetic vs numeric segments, digit ratio,
+unique-char ratio, longest run, Shannon entropy. Every rule below came
+from an observed separation, not a guess.
+
+Three failure groups, each with a distinct cause:
+(a) read as URL  - gemini-2.0-flash-exp, qwen2.5-coder-32b-instruct,
+    phi-3.5-mini-instruct, gpt-4.1-2025-04-14. Cause: the old rule was
+    "has dots and no spaces", which every versioned model id satisfies.
+(b) read as KEY  - claude-3-5-sonnet-20241022, qwen3-235b-...
+    instruct-2507. Cause: a trailing date makes the token look random,
+    so the entropy test fired before the model test.
+(c) UNKNOWN      - nvidia/Llama-3.1-Nemotron-70B-Instruct-HF. Cause: a
+    slash-bearing repo path matched neither branch.
+
+3. THE RULES (core/classifier.js)
+- Hostname: the LAST dotted label must be alphabetic. A TLD is letters;
+  a model version dot is followed by a number. One rule fixes group (a).
+- Model: a token with at least two segments where one segment contains a
+  3+ letter word. Requires >1 segment on purpose: a bare English word
+  also has a 3-letter run, and without this "some totally unknown
+  content" parsed as four models and lost its UNKNOWN status (caught by
+  existing test S8).
+- Key: an unbroken blob with no separators is a key. Every model id is
+  composed; a prefix-free key is not. This catches keys that no prefix
+  table can enumerate.
+- Key prefix table extended to non-LLM vendors (GitHub, GitLab,
+  HuggingFace, Replicate, Stripe, AWS, NVIDIA, Cohere), because those
+  payloads contain readable letter runs such as "ghp", "glpat" and
+  "live" and are model-shaped by accident.
+
+4. WHAT WAS MEASURED AND REJECTED
+Shannon entropy was the obvious discriminator and it does NOT work. Keys
+span 3.84-5.14 bits/char but real models reach 4.43
+(nvidia/Llama-3.1-Nemotron-70B-Instruct-HF), which is higher than the
+weakest real key. Any threshold that catches those keys also destroys
+that model. Rejected on evidence, not on taste.
+
+A "real English word" test (case-boundary + vowel check) was also tried
+and abandoned: it still flagged glpat/sk_live, and it failed to recognise
+gpt-4o, Qwen/Qwen2.5-72B-Instruct and gpt-4.1-2025-04-14.
+
+5. OVER-FIT CHECK (this is the part that matters)
+The first working version scored 71/71 on the corpus. Testing against 51
+values NOT in the corpus showed only 39/51: six real key formats
+(ghp_, glpat-, hf_, r8_, sk_live_, pk_live_) were being read as models,
+because their payloads contain letter runs and no vendor prefix was
+listed. That gap is exactly what a corpus-only score hides.
+
+After the prefix table and the blob rule, held-out results are 56/56:
+35 models, 11 keys, 6 URLs, 4 prose strings. Those 56 values are now
+permanent assertions in tests/cases-classifier.js (suite CL2) so a
+future change cannot score well by memorising the corpus.
+
+6. TEST RESULTS
+- npm test: 103 passed, 0 failed (was 87; 16 new classifier cases).
+- node --no-experimental-fetch tests/bench-classifier.js:
+  TOTAL 71/71 (100%) - API_KEY 14/14, URL 8/8, UNKNOWN 5/5, MODEL 44/44.
+  Previously 45/71 with MODEL 18/44.
+- Ingest path re-checked end to end: a mixed paste of URL + labelled
+  model + key still classifies as URL / MODEL / API_KEY.
+- Held-out (not in corpus): 56/56.
+
+7. SAFETY
+core/classifier.js was the file an earlier edit had broken, taking real
+key formats with it. This time the change is backed by a benchmark that
+must run before AND after, by per-rule assertions, and by a held-out set
+chosen to include key formats the corpus does not contain. No existing
+key case regressed: 14/14 before, 14/14 after.

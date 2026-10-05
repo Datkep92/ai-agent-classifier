@@ -127,6 +127,17 @@ node --no-experimental-fetch tests/bench-classifier.js
 ```
 
 It scores URL / MODEL / API_KEY classification on real-world-shaped
-inputs. Current standing: 45/71 overall, 14/14 API keys, 8/8 URLs,
-18/44 models. Model-vs-key confusion is a known open defect and is
-deliberately tracked rather than papered over.
+inputs. Current standing: 71/71 overall — 14/14 API keys, 8/8 URLs,
+5/5 unknown, 44/44 models.
+
+Classification is structural, not keyword-based:
+
+- A hostname's last dotted label must be alphabetic. That is what
+  separates `api.anthropic.com` from `gemini-2.0-flash-exp`.
+- A model id is composed of readable words (`sonnet`, `instruct`) and
+  always has a separator. A random key blob has neither.
+- A documented vendor key prefix wins over both, which is what keeps
+  `ghp_...` or `sk_live_...` from reading as model names.
+
+Because the corpus alone can be memorised, `tests/cases-classifier.js`
+also asserts 56 held-out values that do not appear in the corpus.
