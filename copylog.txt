@@ -611,3 +611,84 @@ key formats with it. This time the change is backed by a benchmark that
 must run before AND after, by per-rule assertions, and by a held-out set
 chosen to include key formats the corpus does not contain. No existing
 key case regressed: 14/14 before, 14/14 after.
+
+==================================================
+COP YLOG - MANUAL MAP, KEY DELETE, MEMORY, FILTERS, LEGEND, CACHE
+Date: 2026-10-06
+==================================================
+
+1. THE ASKS
+a) Manual mapping: an unidentified model should be attachable to a chosen
+   URL, for the case no probe can settle.
+b) Delete an API key from a URL, and remember the delete so it is not
+   silently restored on a later paste.
+c) Remember that a model does not belong to a URL so it is never rescanned,
+   unless the user maps it by hand.
+d) Drop API keys that have expired so they stop generating mappings.
+e) Add filters; clicking one shows the URL / model / API list for that
+   state, individually copyable, and lets a broken key be excluded.
+f) Explain what the colours mean.
+g) Test thoroughly, and make sure users actually receive the new build.
+
+2. WHAT WAS BUILT
+Manual mapping: registry.attachModel records source 'manual' and stars the
+model, then probes the provider's existing keys so the row says whether it
+really answers. It also clears any remembered rejection for that pairing.
+
+Key deletion: registry.removeKey deletes the secret and its mappings, and
+remembers the fingerprint in a 'deletedKeys' store. upsertKey now honours
+that memory and returns { blocked: true }; the paste path reports it as
+blocked instead of pretending the paste did nothing. Per provider, so the
+same secret still works on a different URL. restoreKey undoes it.
+
+Memory of rejections: registry.recordRejectedModel / shouldProbeModel, keyed
+by provider identity + model id, never by secret. syncPastedModelsToProviders
+skips a pairing already refused and reports ALREADY_REJECTED;
+ensureMappings skips it too.
+
+Expiry: pruneExpiredKeys drops keys whose status is terminal
+(EXPIRED, AUTH_INVALID, or a quota with no refill), and remembers them.
+Called at the start of syncAllProviders, before any network work.
+
+Keys belong to a URL: addKeyToProvider attaches a secret to a provider and
+the UI immediately calls ensureMappings, so one key is applied to every
+model that URL lists. No per-model key assignment exists anywhere.
+
+Filters: chips narrow the view and open a dialog listing every matching
+URL / model / key. Each value is copyable individually, plus copy-all. The
+broken bucket also offers a per-row delete.
+
+Legend: a collapsible panel listing every status with what was observed and
+the one action that changes it.
+
+2. BUGS FOUND BY THE NEW TESTS
+(a) listMappings accepted a filter object but silently ignored a bare
+    string, returning EVERY mapping instead of one provider's. Production
+    code in mapper.js passed a providerId string in two places, so deleting a
+    disproved model could remove mappings belonging to other providers. Both
+    call sites now work correctly and the API accepts either form.
+(b) PROVIDER_DOWN used the same colour as DISCOVERED, then as
+    QUOTA_EXHAUSTED, so "never tested", "out of credit" and "server down"
+    were indistinguishable. It now uses the no-entry sign.
+(c) Two test cases of my own asserted mapping counts without ever calling
+    ensureMappings, and one used the wrong provider handle. Those were test
+    bugs, corrected rather than papered over.
+
+3. TEST RESULTS
+- npm test: 154 passed, 0 failed (was 135).
+  New suites: FL (9) filter buckets, LG (5) legend stays in sync with the
+  core and no two statuses share a colour, KS (9) a key belongs to the URL
+  and serves all of its models, LM (5) listMappings filtering cannot
+  silently no-op, MN (11) manual mapping and key removal, PR (12) memory of
+  rejections and expiry pruning.
+- Classifier benchmark unchanged: TOTAL 71/71, API_KEY 14/14.
+- Local server: all assets 200 with correct sizes; legend, filter chips and
+  all four dialogs present in the served HTML.
+
+4. CACHE / DELIVERY
+GitHub Pages serves with cache-control max-age=600, so a phone could keep
+running the previous app for ten minutes after a deploy.
+- index.html references app.js and styles.css with a content-derived
+  ?v=<hash>, so a new app.js is a new URL.
+- sw.js (network-first, same-origin only, never intercepts provider API
+  calls) is registered from app.js and revalidates on every load.

@@ -1,6 +1,12 @@
 import { run } from './harness.js';
 import { createMockFetch } from './mock-fetch.js';
 import { registerClassifierCases, registerHeldOutCases } from './cases-classifier.js';
+import { registerManualCases } from './cases-manual.js';
+import { registerPruneCases } from './cases-prune.js';
+import { registerFilterCases } from './cases-filter.js';
+import { registerLegendCases } from './cases-legend.js';
+import { registerKeyScopeCases } from './cases-keyscope.js';
+import { registerListMappingsCases } from './cases-listmappings.js';
 import { registerCasesAtoE, OK_MODELS, OK_CHAT } from './cases-a-to-e.js';
 import { registerCasesFtoO } from './cases-f-to-o.js';
 import { registerSecurityCases, bindMock } from './cases-security.js';
@@ -32,6 +38,12 @@ registerProviderSyncCases(mock);
 registerQuickTestCases(mock);
 registerClassifierCases();
 registerHeldOutCases();
+registerManualCases(mock);
+registerPruneCases();
+registerFilterCases();
+registerLegendCases();
+registerKeyScopeCases();
+registerListMappingsCases();
 
 const ok = await run();
 process.exit(ok ? 0 : 1);

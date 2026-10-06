@@ -340,6 +340,10 @@ export class TestEngine {
       if (!providerKeys.length || !providerModels.length) continue;
 
       for (const model of providerModels) {
+        // Skip a model this provider already refused. Re-creating the same
+        // mapping every run is how a rejected pair gets re-probed for ever.
+        if (!(await this.registry.shouldProbeModel(provider.identity, model.modelId))) continue;
+
         for (const key of providerKeys) {
           const identity = `${provider.id}::${model.modelId}::${key.id}`;
           if (have.has(identity)) continue;

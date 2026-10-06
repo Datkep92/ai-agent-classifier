@@ -6,7 +6,7 @@ import {
   providerNameFromURL,
   normalizeModelId,
 } from './normalizer.js';
-import { STATUS } from './statuses.js';
+import { STATUS, TERMINAL_STATUS } from './statuses.js';
 import { fingerprintSecret, maskSecret, makeId, isoNow, nowMs } from './util.js';
 import { CONFIG } from './config.js';
 
@@ -158,6 +158,65 @@ export class Registry {
   }
 
   /**
+   * Attach a model to a provider on the user's explicit instruction (§7).
+   *
+   * Distinct from upsertModel: the caller is stating a fact ("this model
+   * belongs to this URL") that no probe could have inferred, because the
+   * provider does not advertise it. Recorded as source 'manual' so it stays
+   * distinguishable from something that was discovered, and starred because
+   * naming a model by hand is a statement of intent.
+   *
+   * When a probe is available it still runs against the provider's existing
+   * keys. A hand-made mapping is not automatically healthy: the record has to
+   * say whether the model actually answers.
+   */
+  async attachModel({ providerId, modelId, registry, probe = false } = {}) {
+    const target = registry ?? this;
+    const cleanId = normalizeModelId(modelId);
+    if (!cleanId) throw new Error('Empty modelId');
+
+    // Accept `true` as shorthand for "probe with the real prober": callers in
+    // the UI should not have to import the probe module themselves.
+    const prober =
+      typeof probe === 'function'
+        ? probe
+        : probe
+          ? await import('./probe.js').then((m) => m.probeMapping)
+          : null;
+
+    const { model, created } = await this.upsertModel({
+      providerId,
+      modelId: cleanId,
+      source: 'manual',
+      capabilities: { favourite: true },
+    });
+
+    // Mapping by hand is an explicit instruction to try this pairing, so any
+    // earlier rejection of it is forgotten.
+    const mapped = await this.getProvider(providerId);
+    if (mapped?.identity) await this.clearRejectedModel(mapped.identity, model.modelId);
+
+    if (!prober) return { model, created, probed: 0 };
+
+    const provider = await this.getProvider(providerId);
+    let probed = 0;
+    for (const key of await this.listKeys(providerId)) {
+      if (key.enabled === false) continue;
+      const { mapping } = await this.upsertMapping({
+        providerId,
+        modelId: model.modelId,
+        keyId: key.id,
+        status: STATUS.UNRESOLVED,
+      });
+      if (!prober) continue;
+      await prober({ registry: target, mapping, model, key, provider });
+      probed += 1;
+    }
+
+    return { model, created, probed };
+  }
+
+  /**
    * Merge capabilities into a model WITHOUT touching provenance.
    *
    * `upsertModel` records where a model came from (source/sources). Starring a
@@ -203,6 +262,12 @@ export class Registry {
     if (!trimmed) throw new Error('Empty secret');
     const fingerprint = await fingerprintSecret(trimmed);
 
+    // The user deleted this exact secret from this provider before. Honour
+    // that decision instead of quietly restoring it on the next paste.
+    if (await this.isKeyDeleted(providerId, fingerprint)) {
+      return { key: null, created: false, blocked: true };
+    }
+
     const existing = await this.findKeyByFingerprint(providerId, fingerprint);
     if (existing) {
       // Keep the original secret; we never overwrite a secret in place (§22).
@@ -228,6 +293,203 @@ export class Registry {
     return { key, created: true };
   }
 
+  // ------------------------------------------- Remembered rejections (§7)
+  //
+  // A model that a provider has already refused must not be probed against it
+  // again on every sweep. Without this, "TAI LAI MODEL" re-tests the whole
+  // model x key surface each run, re-learning facts already established and
+  // burning real requests on answers we already have.
+  //
+  // Keyed by provider identity + model id, never by secret: this is a claim
+  // about the model, not about anyone's key.
+
+  async recordRejectedModel(providerIdentity, modelId, reason = null) {
+    const identity = `${providerIdentity}::${modelId}`;
+    const existing = (await this.storage.list('rejectedModels')).find(
+      (r) => r.identity === identity
+    );
+    if (existing) {
+      const updated = { ...existing, reason, rejectedAt: isoNow() };
+      await this.storage.put('rejectedModels', updated);
+      return updated;
+    }
+    const record = {
+      id: makeId('rej'),
+      identity,
+      providerIdentity,
+      modelId,
+      reason,
+      rejectedAt: isoNow(),
+    };
+    await this.storage.put('rejectedModels', record);
+    return record;
+  }
+
+  async listRejectedModels(providerIdentity = null) {
+    const all = await this.storage.list('rejectedModels');
+    return providerIdentity ? all.filter((r) => r.providerIdentity === providerIdentity) : all;
+  }
+
+  /** False when this provider has already refused this model. */
+  async shouldProbeModel(providerIdentity, modelId) {
+    const identity = `${providerIdentity}::${modelId}`;
+    return !(await this.storage.list('rejectedModels')).some((r) => r.identity === identity);
+  }
+
+  /** True when this provider has already refused this model. */
+  async isRememberedRejection(providerIdentity, modelId) {
+    return !(await this.shouldProbeModel(providerIdentity, modelId));
+  }
+
+  /** Forget a rejection: the user asked for this pairing to be tried again. */
+  async clearRejectedModel(providerIdentity, modelId) {
+    const identity = `${providerIdentity}::${modelId}`;
+    for (const record of await this.storage.list('rejectedModels')) {
+      if (record.identity === identity) await this.storage.remove('rejectedModels', record.id);
+    }
+  }
+
+  /**
+   * Drop keys that reached a terminal state, and remember them by fingerprint.
+   *
+   * "Never deletes a key" is about not throwing away something that might work.
+   * An EXPIRED or AUTH_INVALID key is the opposite: the provider said so. Left
+   * in place it keeps generating mappings that fail the same way forever, so
+   * pruning it is what actually stops the repeat scanning.
+   *
+   * Only terminal, key-scoped statuses qualify. A rate limit, a timeout or a
+   * model denial is NOT the key's fault and must never evict it.
+   */
+  async pruneExpiredKeys({ now = Date.now(), statuses = TERMINAL_STATUS } = {}) {
+    let pruned = 0;
+
+    for (const key of await this.storage.list('keys')) {
+      if (!statuses.has(key.status)) continue;
+
+      // A quota that refills is not an expiry. Only statuses with no
+      // self-healing path are pruned.
+      if (
+        key.status === STATUS.QUOTA_EXHAUSTED &&
+        key.cooldownUntil &&
+        Date.parse(key.cooldownUntil) > now
+      ) {
+        continue;
+      }
+
+      await this.removeKey(key.id);
+      pruned += 1;
+    }
+
+    return pruned;
+  }
+
+  /**
+   * Fingerprints the user has asked us to forget, per provider (§4, §35).
+   *
+   * "Never deletes a key" is the default, but it is the wrong rule when the
+   * user explicitly deletes one: re-pasting the same secret would otherwise
+   * bring it straight back and the delete would appear to do nothing.
+   *
+   * Only the non-reversible fingerprint is stored, never the secret itself,
+   * so this list is safe to keep and safe to export.
+   */
+  async _rememberDeleted(providerId, fingerprint) {
+    const store = await this.storage.list('deletedKeys');
+    const identity = `${providerId}::${fingerprint}`;
+    if (store.some((d) => d.identity === identity)) return;
+
+    await this.storage.put('deletedKeys', {
+      id: makeId('del'),
+      identity,
+      providerId,
+      fingerprint,
+      deletedAt: isoNow(),
+    });
+  }
+
+  async isKeyDeleted(providerId, fingerprint) {
+    const identity = `${providerId}::${fingerprint}`;
+    return (await this.storage.list('deletedKeys')).some((d) => d.identity === identity);
+  }
+
+  async listDeletedKeys() {
+    return this.storage.list('deletedKeys');
+  }
+
+  /**
+   * Delete a key for good, with its mappings.
+   *
+   * Removes the secret from storage entirely and records the fingerprint so
+   * the same secret cannot be silently re-imported on the next paste. Returns
+   * false when the id is unknown so the UI can report honestly.
+   */
+  async removeKey(id) {
+    const key = await this.getKey(id);
+    if (!key) return false;
+
+    // Mappings are the only other place the key id is referenced. Leaving
+    // them behind would show rows in the tree with no key behind them.
+    for (const mapping of await this.storage.list('mappings')) {
+      if (mapping.keyId === id) await this.storage.remove('mappings', mapping.id);
+    }
+
+    await this._rememberDeleted(key.providerId, key.fingerprint);
+    await this.storage.remove('keys', id);
+    return true;
+  }
+
+  /** Undo a delete: the user changed their mind, so the key comes back. */
+  async restoreKey(providerId, secret) {
+    const trimmed = String(secret ?? '').trim();
+    if (!trimmed) throw new Error('Empty secret');
+    const fingerprint = await fingerprintSecret(trimmed);
+
+    const identity = `${providerId}::${fingerprint}`;
+    for (const record of await this.storage.list('deletedKeys')) {
+      if (record.identity !== identity) continue;
+      await this.storage.remove('deletedKeys', record.id);
+    }
+
+    const restored = await this.upsertKey({ providerId, secret: trimmed });
+
+    // A key coming back is a fresh chance for its models, so clear the
+    // rejections recorded against this provider.
+    const owner = await this.getProvider(providerId);
+    if (owner?.identity) {
+      for (const record of await this.storage.list('rejectedModels')) {
+        if (record.providerIdentity === owner.identity) {
+          await this.storage.remove('rejectedModels', record.id);
+        }
+      }
+    }
+
+    return restored;
+  }
+
+  /**
+   * Attach a secret to a provider on request (§7, §25).
+   *
+   * A key belongs to a URL, not to a model: one secret serves every model that
+   * provider lists. The UI calls this when the user types a key into a URL, and
+   * the caller then runs ensureMappings so the new key is immediately usable
+   * across that URL's whole model list rather than one row at a time.
+   *
+   * Reports a reason instead of throwing, because every failure here is
+   * something the user can correct: an empty box, a duplicate, or a key they
+   * deleted earlier.
+   */
+  async addKeyToProvider({ providerId, secret }) {
+    const trimmed = String(secret ?? '').trim();
+    if (!trimmed) return { key: null, created: false, reason: 'EMPTY' };
+
+    const provider = await this.getProvider(providerId);
+    if (!provider) return { key: null, created: false, reason: 'NO_PROVIDER' };
+
+    const { key, created, blocked } = await this.upsertKey({ providerId, secret: trimmed });
+    if (blocked) return { key: null, created: false, reason: 'BLOCKED' };
+    return { key, created, reason: created ? 'ADDED' : 'DUPLICATE' };
+  }
+
   async setKeyEnabled(id, enabled) {
     const key = await this.getKey(id);
     if (!key) return null;
@@ -246,12 +508,26 @@ export class Registry {
 
   // ----------------------------------------------------------------- Mappings
 
+  /**
+   * List mappings, optionally filtered.
+   *
+   * Accepts either a filter object or a bare providerId. The bare form was
+   * easy to reach by mistake and silently ignored its argument, which returns
+   * EVERY mapping instead of one provider's — a wrong-answer bug rather than
+   * an error.
+   */
   async listMappings(filter = {}) {
+    const criteria = typeof filter === 'string' ? { providerId: filter } : filter ?? {};
+
     let mappings = await this.storage.list('mappings');
-    if (filter.providerId) mappings = mappings.filter((m) => m.providerId === filter.providerId);
-    if (filter.modelId) mappings = mappings.filter((m) => m.modelId === filter.modelId);
-    if (filter.keyId) mappings = mappings.filter((m) => m.keyId === filter.keyId);
-    if (filter.verified !== undefined) mappings = mappings.filter((m) => m.verified === filter.verified);
+    if (criteria.providerId) {
+      mappings = mappings.filter((m) => m.providerId === criteria.providerId);
+    }
+    if (criteria.modelId) mappings = mappings.filter((m) => m.modelId === criteria.modelId);
+    if (criteria.keyId) mappings = mappings.filter((m) => m.keyId === criteria.keyId);
+    if (criteria.verified !== undefined) {
+      mappings = mappings.filter((m) => m.verified === criteria.verified);
+    }
     return mappings;
   }
 
@@ -452,7 +728,11 @@ export class Registry {
     for (const model of payload.models ?? []) {
       const providerId = providerIdMap.get(providerIdentity(model.baseURL ?? '')) ?? model.providerId;
       if (!providerId) continue;
-      const { created } = await this.upsertModel({ ...model, providerId, source: 'imported' });
+      // Keep the original source. Relabelling everything 'imported' erased the
+      // distinction between a model the user mapped by hand and one that was
+      // merely discovered somewhere else.
+      const source = model.sources?.includes(model.source) ? model.source : model.source ?? 'imported';
+      const { created } = await this.upsertModel({ ...model, providerId, source });
       if (created) result.models += 1;
     }
 

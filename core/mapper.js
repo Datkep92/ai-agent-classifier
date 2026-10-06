@@ -164,6 +164,13 @@ async function syncPastedModelsToProviders({ registry, item, providers, probe, l
   const tried = [];
 
   for (const provider of providers) {
+    // Already refused here once. Trying again burns a request to re-learn a
+    // fact we are certain of.
+    if (provider.identity && !(await registry.shouldProbeModel(provider.identity, item.raw))) {
+      tried.push({ provider: provider.name, result: 'ALREADY_REJECTED' });
+      continue;
+    }
+
     const keys = (await registry.listKeys(provider.id)).filter((k) => k.enabled !== false);
 
     // No key is not a dead end: an unauthenticated probe is real evidence too
@@ -195,6 +202,7 @@ async function syncPastedModelsToProviders({ registry, item, providers, probe, l
         if (mapping.modelId === model.modelId) await registry.storage.remove('mappings', mapping.id);
       }
       await registry.removeModel(provider.id, model.modelId);
+      if (provider.identity) await registry.recordRejectedModel(provider.identity, item.raw);
       tried.push({ provider: provider.name, result: 'NOT_AVAILABLE' });
       continue;
     }
@@ -241,6 +249,10 @@ async function syncPastedModelsToProviders({ registry, item, providers, probe, l
       if (mapping.modelId === model.modelId) await registry.storage.remove('mappings', mapping.id);
     }
     await registry.removeModel(provider.id, model.modelId);
+
+    // Remember the refusal so later sweeps do not spend requests rediscovering
+    // it. The user can undo this by mapping the model by hand.
+    if (provider.identity) await registry.recordRejectedModel(provider.identity, item.raw);
     tried.push({ provider: provider.name, result: 'NOT_AVAILABLE' });
   }
 
@@ -311,10 +323,18 @@ export async function resolveUnresolved({ registry, probe, log }) {
           continue;
         }
 
-        const { key } = await registry.upsertKey({
+        const { key, blocked } = await registry.upsertKey({
           providerId: provider.id,
           secret: item.raw,
         });
+
+        // The user deleted this secret from this provider before. Do not
+        // resurrect it and do not claim it was accepted: keep scanning the
+        // other providers, and leave the item parked if none take it.
+        if (blocked) {
+          attempted.push({ provider: provider.name, result: 'BLOCKED_BY_USER' });
+          continue;
+        }
 
         if (!models.length) {
           // Authenticated but advertises nothing: the key is valid and now

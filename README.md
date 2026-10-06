@@ -87,6 +87,51 @@ Workers, a Telegram bot, or an EXE.
 | `KIEM TRA TAT CA` | Probe every existing mapping. |
 | `KIEM TRA NHANH` | Probe only starred models and mappings never tested. |
 | `HUY` | Stop the current run, including the background startup sync. |
+| `+ Key` (on a URL) | Add an API key to that URL. It applies to every model there. |
+| `Gán thủ công` (in the inbox) | Attach an unidentified model to a URL you pick. |
+| `✕` (on a key) | Delete that key for good. It will not come back on a re-paste. |
+| `×` (in a filter list) | Drop that key from scanning without leaving the screen. |
+
+## Keys belong to a URL, not to a model
+
+One key serves every model that its URL lists. Adding a key to a provider
+builds the mappings for all of that provider's models at once, so there is no
+per-model key assignment anywhere in the app.
+
+```
+▼ https://opencode.ai/zen/v1          [+ Key]  [Kiểm tra]
+    ├─ gpt-4o            ★
+    │   ├─ oc_s*****I9j0  🟢
+    │   └─ oc_s*****R1q0  🟢
+    └─ fledge-alpha-free
+        ├─ oc_s*****I9j0  🟢          ← same key, same URL
+        └─ oc_s*****R1q0  🟢
+```
+
+## Nothing is retried for nothing
+
+Two memories keep repeated work off the bill:
+
+- **A rejected model stays rejected** for a given URL. If a provider refused a
+  model, later syncs skip that pairing instead of re-spending a request to
+  rediscover it. Mapping that model by hand clears the memory, because that is
+  an explicit instruction to try again.
+- **A key that reached a terminal state is dropped** (`EXPIRED`,
+  `AUTH_INVALID`, and a quota with no refill). Its fingerprint is remembered
+  so re-pasting the same secret does not bring it back. A rate limit or a
+  timeout never evicts a key.
+
+## Filters
+
+Chips narrow the tree and open a copyable list of every URL / model / key in
+that bucket. Filtering only affects the view; nothing is hidden from storage.
+Click a value to copy it, or copy the whole bucket at once.
+
+## Colours
+
+See the legend at the top of the app: every colour states what was observed
+and the one action that changes it. A colour describes one URL+model+key
+combination, not the provider as a whole.
 
 A star next to a model means "in use". Pasted models are starred
 automatically; discovered models can be starred by tapping the star.

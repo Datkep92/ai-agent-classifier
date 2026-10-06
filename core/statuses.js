@@ -25,7 +25,11 @@ export const STATUS_META = {
   AUTH_INVALID: { emoji: '🔴', label: 'Invalid', scope: 'key' },
   EXPIRED: { emoji: '⚫', label: 'Expired', scope: 'key' },
   MODEL_DENIED: { emoji: '🟡', label: 'Model denied', scope: 'mapping' },
-  PROVIDER_DOWN: { emoji: '🔵', label: 'Provider down', scope: 'provider' },
+  // Distinct from DISCOVERED and QUOTA_EXHAUSTED on purpose: those used 🔵 and
+  // 🟣, so "not yet tested", "out of credit" and "server down" were hard to
+  // tell apart in the tree. ⚫ is EXPIRED, so this uses the white circle with a
+  // slash to read as "the whole endpoint is unreachable".
+  PROVIDER_DOWN: { emoji: '🚫', label: 'Provider down', scope: 'provider' },
   TEMP_ERROR: { emoji: '🟤', label: 'Temp error', scope: 'mapping' },
   REQUEST_ERROR: { emoji: '⚪', label: 'Request error', scope: 'request' },
   UNKNOWN_ERROR: { emoji: '⚪', label: 'Unknown error', scope: 'mapping' },

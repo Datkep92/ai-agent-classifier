@@ -145,6 +145,120 @@ function severity(status) {
 
 // ------------------------------------------------------------------ render
 
+// ------------------------------------------------------------ status legend
+//
+// Colours were unexplained, so a red dot gave no idea whether to wait, fix
+// the key, or delete it. Each entry states what was OBSERVED and the one
+// action that actually changes it.
+//
+// `scope` matters as much as the colour: 'key' means the credential is the
+// problem, 'mapping' means only this model+key pair is.
+
+const LEGEND = [
+  {
+    emoji: '\u{1F7E2}',
+    name: 'Khỏe',
+    meaning: 'Gửi yêu cầu thật và provider trả lời được. Dùng được ngay.',
+    act: 'Không cần làm gì',
+  },
+  {
+    emoji: '\u{1F535}',
+    name: 'Đã quét',
+    meaning: 'URL trả về danh sách model, nhưng chưa gọi thử model nào.',
+    act: 'Bấm KIỂM TRA để xác minh',
+  },
+  {
+    emoji: '\u{1F7E0}',
+    name: 'Chờ',
+    meaning: 'Bị giới hạn tốc độ (429). Đã tự đặt hẹn giờ, hết giờ là thử lại.',
+    act: 'Chờ, không cần động vào',
+  },
+  {
+    emoji: '\u{1F7E3}',
+    name: 'Hết quota',
+    meaning: 'Key hết hạn mức dùng. Không phải lỗi key.',
+    act: 'Nạp thêm hoặc đổi key',
+  },
+  {
+    emoji: '\u{1F534}',
+    name: 'Key sai',
+    meaning: 'Provider từ chối key này. Thường là copy thiếu hoặc sai.',
+    act: 'Sửa key, hoặc xoá nếu không dùng',
+  },
+  {
+    emoji: '⚫',
+    name: 'Hết hạn',
+    meaning: 'Key đã hết hạn. Sẽ bị loại khỏi danh sách quét.',
+    act: 'Dán key mới',
+  },
+  {
+    emoji: '\u{1F7E1}',
+    name: 'Model bị chặn',
+    meaning: 'Key đúng nhưng không được phép dùng model này. Key vẫn dùng được với model khác.',
+    act: 'Thử model khác',
+  },
+  {
+    emoji: '\u{1F7E4}',
+    name: 'Server lỗi',
+    meaning: 'Provider không phản hồi hoặc lỗi phía họ. Không phải lỗi của bạn.',
+    act: 'Chờ hoặc đổi URL',
+  },
+  {
+    emoji: '\u{1F7E5}',
+    name: 'Lỗi tạm thời',
+    meaning: 'Timeout hoặc lỗi mạng. Thường tự khỏi.',
+    act: 'Thử lại',
+  },
+  {
+    emoji: '⚪',
+    name: 'Lỗi chưa rõ',
+    meaning: 'Provider trả lỗi lạ, không khớp mẫu nào đã biết.',
+    act: 'Bấm ⋯ để xem chi tiết',
+  },
+  {
+    emoji: '❓',
+    name: 'Chưa xác định',
+    meaning: 'Chưa biết thuộc URL nào, hoặc chưa kiểm tra được.',
+    act: 'Gán thủ công, hoặc kiểm tra lại',
+  },
+  {
+    emoji: '⏸️',
+    name: 'Đã tắt',
+    meaning: 'Bạn đã tắt key này. Vẫn còn, chỉ không quét.',
+    act: 'Bấm Bật để dùng lại',
+  },
+];
+
+function renderLegend() {
+  const root = $('legendRoot');
+  if (!root) return;
+  root.replaceChildren();
+
+  for (const entry of LEGEND) {
+    const row = document.createElement('div');
+    row.className = 'legend-row';
+
+    const emoji = document.createElement('span');
+    emoji.className = 'e';
+    emoji.textContent = entry.emoji;
+
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = entry.name;
+
+    const meaning = document.createElement('span');
+    meaning.className = 'mean';
+    meaning.textContent = entry.meaning;
+
+    const act = document.createElement('span');
+    act.className = 'act';
+    act.textContent = '→ ' + entry.act;
+
+    row.append(emoji, name, meaning, act);
+    root.append(row);
+  }
+}
+
 function renderSummary(stats) {
   $('sHealthy').textContent = stats.healthy;
   $('sCool').textContent = stats.cooldown;
@@ -153,7 +267,7 @@ function renderSummary(stats) {
   $('sUnresolved').textContent = stats.unresolved;
 }
 
-function renderTree(providers, modelsByProvider, mappings, keysById) {
+function renderTree(providers, modelsByProvider, mappings, keysById, deletedCount = new Map()) {
   treeRoot.replaceChildren();
 
   if (!providers.length) {
@@ -182,6 +296,16 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
     const sub = document.createElement('div');
     sub.className = 'sub';
     sub.textContent = provider.baseURL;
+
+    const deleted = deletedCount.get(provider.id) ?? 0;
+    if (deleted) {
+      const gone = document.createElement('div');
+      gone.className = 'sub';
+      gone.textContent = deleted + ' key đã xoá';
+      gone.style.color = 'var(--danger)';
+      sub.after(gone);
+    }
+
     name.append(title, sub);
 
     const badge = document.createElement('span');
@@ -196,7 +320,18 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
       testProvider(provider);
     });
 
-    row.append(caret, name, badge, test);
+    // A key belongs to the URL, so this lives on the URL row: one key is
+    // applied to every model underneath, not attached model by model.
+    const addKey = document.createElement('button');
+    addKey.className = 'small';
+    addKey.textContent = '+ Key';
+    addKey.title = 'Thêm API key cho URL này, dùng cho mọi model';
+    addKey.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openKeyDialog(provider);
+    });
+
+    row.append(caret, name, badge, addKey, test);
 
     const children = document.createElement('div');
     children.className = 'children';
@@ -383,7 +518,18 @@ function renderTree(providers, modelsByProvider, mappings, keysById) {
           await refresh();
         });
 
-        leaf.append(dot, masked, pill, testKeyBtn, retry, info, toggle);
+        // Delete the key for good. Remembers the fingerprint so the same
+        // secret cannot come back on the next paste.
+        const del = document.createElement('button');
+        del.className = 'small danger';
+        del.textContent = '\u2715';
+        del.title = 'Xoá API key này khỏi URL';
+        del.addEventListener('click', (event) => {
+          event.stopPropagation();
+          openDeleteDialog(key, provider);
+        });
+
+        leaf.append(dot, masked, pill, testKeyBtn, retry, info, toggle, del);
         modelChildren.append(leaf);
       }
 
@@ -435,6 +581,17 @@ function renderInbox(items) {
       (item.candidates?.length ? ' · candidates: ' + item.candidates.join(', ') : '');
 
     box.append(type, raw, meta);
+
+    // An unidentified MODEL can always be settled by hand. This is the escape
+    // hatch for the case no probe can resolve: the provider does not advertise
+    // the model, but the user knows it works.
+    if (item.detectedType === 'MODEL') {
+      const pick = document.createElement('button');
+      pick.className = 'small';
+      pick.textContent = 'Gán thủ công';
+      pick.addEventListener('click', () => openMapDialog(item.raw));
+      box.append(pick);
+    }
     inboxRoot.append(box);
   }
 }
@@ -445,6 +602,162 @@ function showError(mapping) {
       ? mapping.lastErrorClass + '\n\n' + (mapping.lastErrorMessage ?? '(no message)')
       : 'Mapping này chưa ghi nhận lỗi nào.';
   $('errDialog').showModal();
+}
+
+// ------------------------------------------------------------ filtering
+//
+// The tree can get long, so the chips narrow it. Filtering happens on the
+// RENDER path only: nothing is deleted or hidden from the registry, so
+// switching back to "all" always shows the true state.
+
+const FILTERS = {
+  all: () => true,
+  healthy: (m) => m.status === STATUS.HEALTHY,
+  // "Broken" means the credential itself failed, not a model denial or a
+  // rate limit: those are not the key's fault.
+  broken: (m) =>
+    [STATUS.AUTH_INVALID, STATUS.EXPIRED, STATUS.QUOTA_EXHAUSTED, STATUS.PROVIDER_DOWN].includes(m.status),
+  pending: (m) =>
+    [STATUS.RATE_LIMITED, STATUS.TEMP_ERROR, STATUS.UNRESOLVED, STATUS.DISCOVERED].includes(m.status),
+  unresolved: (m) => !m.lastTestAt,
+};
+
+let activeFilter = 'all';
+
+function applyFilter(filter) {
+  activeFilter = FILTERS[filter] ? filter : 'all';
+  for (const chip of document.querySelectorAll('.chip')) {
+    chip.classList.toggle('on', chip.dataset.filter === activeFilter);
+  }
+  refresh();
+}
+
+// ------------------------------------------------- detail dialog (copyable)
+// One bucket per chip: clicking "Khỏe" shows every URL / model / key that is
+// healthy. Each value is individually copyable, because the usual next step
+// after seeing this list is to paste it somewhere else.
+
+let detailLines = [];
+
+function collectDetail(filter) {
+  const matches = FILTERS[filter] ?? FILTERS.all;
+
+  return registry.listMappings().then((mappings) =>
+    Promise.all([registry.listProviders(), registry.listKeys(), registry.listModels()]).then(
+      ([providers, keys, models]) => {
+        const providerById = new Map(providers.map((p) => [p.id, p]));
+        const keyById = new Map(keys.map((k) => [k.id, k]));
+        const modelByKey = new Map(models.map((m) => [`${m.providerId}::${m.modelId}`, m]));
+
+        const lines = [];
+        for (const mapping of mappings) {
+          if (!matches(mapping)) continue;
+          const provider = providerById.get(mapping.providerId);
+          const key = keyById.get(mapping.keyId);
+          const model = modelByKey.get(`${mapping.providerId}::${mapping.modelId}`);
+          lines.push({
+            url: provider?.baseURL ?? '(không rõ)',
+            model: model?.modelId ?? mapping.modelId,
+            // Full secret for copy: the user asked for this list to be usable.
+            // Copy is an explicit act, unlike the tree where it stays masked.
+            key: key?.secret ?? '(không có key)',
+            status: mapping.status,
+            mappingId: mapping.id,
+            keyId: mapping.keyId,
+            providerId: mapping.providerId,
+          });
+        }
+        return lines;
+      }
+    )
+  );
+}
+
+async function openDetail(filter) {
+  const lines = await collectDetail(filter);
+  detailLines = lines;
+
+  $('detailTitle').textContent = {
+    all: 'Tất cả',
+    healthy: 'Khỏe',
+    broken: 'Hỏng',
+    pending: 'Chờ',
+    unresolved: 'Chưa từng kiểm tra',
+  }[filter] ?? 'Chi tiết';
+
+  $('detailSub').textContent =
+    lines.length + ' dòng · chạm để chép từng giá trị, hoặc chép tất cả';
+
+  const rows = $('detailRows');
+  rows.replaceChildren();
+
+  if (!lines.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'Không có dòng nào khớp bộ lọc này.';
+    rows.append(empty);
+    $('detailDialog').showModal();
+    return;
+  }
+
+  for (const line of lines) {
+    const box = document.createElement('div');
+    box.className = 'row-item';
+
+    for (const [label, value] of [
+      ['url', line.url],
+      ['model', line.model],
+      ['api', line.key],
+    ]) {
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = label;
+
+      const valueEl = document.createElement('span');
+      valueEl.className = 'k';
+      valueEl.textContent = value;
+      valueEl.title = 'Chạm để chép';
+      valueEl.addEventListener('click', () => {
+        navigator.clipboard?.writeText(value).then(
+          () => toast('Đã chép ' + label),
+          () => toast('Không chép được')
+        );
+      });
+
+      box.append(tag, valueEl);
+    }
+
+    // Deleting a key is offered right where the user sees it is broken, so a
+    // dead credential never keeps being re-scanned in the background.
+    if (line.keyId) {
+      const del = document.createElement('button');
+      del.className = 'small danger';
+      del.textContent = '\u2715';
+      del.title = 'Loại key này khỏi danh sách quét';
+      del.addEventListener('click', async () => {
+        const ok = await registry.removeKey(line.keyId);
+        toast(ok ? 'Đã loại key' : 'Key không tồn tại');
+        $('detailDialog').close();
+        await refresh();
+      });
+      box.append(del);
+    }
+
+    rows.append(box);
+  }
+
+  $('detailDialog').showModal();
+}
+
+async function copyAllDetail() {
+  const text = detailLines
+    .map((l) => `${l.url}\n${l.model}\n${l.key}`)
+    .join('\n---\n');
+
+  navigator.clipboard?.writeText(text).then(
+    () => toast('Đã chép ' + detailLines.length + ' dòng'),
+    () => toast('Không chép được')
+  );
 }
 
 async function refresh() {
@@ -458,11 +771,26 @@ async function refresh() {
 
   const keysById = new Map(keys.map((k) => [k.id, k]));
 
+  // Per-provider count of keys the user deleted, so the action stays visible
+  // after the row itself is gone.
+  const deletedCount = new Map();
+  for (const record of await registry.listDeletedKeys()) {
+    deletedCount.set(record.providerId, (deletedCount.get(record.providerId) ?? 0) + 1);
+  }
+
   const modelsByProvider = new Map();
   for (const model of models) {
     if (!modelsByProvider.has(model.providerId)) modelsByProvider.set(model.providerId, []);
     modelsByProvider.get(model.providerId).push(model);
   }
+
+  const matches = FILTERS[activeFilter] ?? FILTERS.all;
+  const shown = mappings.filter(matches);
+
+  $('filterCount').textContent =
+    activeFilter === 'all'
+      ? mappings.length + ' mapping'
+      : shown.length + ' / ' + mappings.length + ' mapping đang lọc';
 
   const stats = {
     healthy: mappings.filter((m) => m.status === 'HEALTHY').length,
@@ -473,7 +801,7 @@ async function refresh() {
   };
 
   renderSummary(stats);
-  renderTree(providers, modelsByProvider, mappings, keysById);
+  renderTree(providers, modelsByProvider, shown, keysById, deletedCount);
   renderInbox(unresolved);
 }
 
@@ -561,6 +889,201 @@ async function testProvider(provider) {
     await refresh();
   }
 }
+
+// ------------------------------------------------- manual mapping (plan 7)
+// The case no probe can settle: the provider does not advertise this model,
+// but the user knows it belongs there. We attach it and then PROBE, so the
+// record says whether it really answers instead of merely that it was asked.
+
+let mapSource = null;
+
+// ------------------------------------------------ add a key to one URL
+//
+// A key belongs to a provider, not to a model: one secret serves every model
+// that URL lists. So the action is "add a key to this URL" and the system
+// builds the mappings for all of that URL's models by itself.
+
+async function openKeyDialog(provider) {
+  $('keyHint').textContent = provider.name + ' — ' + provider.baseURL;
+  $('keySecret').value = '';
+  $('keyDialog').dataset.providerId = provider.id;
+  $('keyDialog').showModal();
+  $('keySecret').focus();
+}
+
+async function confirmAddKey() {
+  const providerId = $('keyDialog').dataset.providerId;
+  const secret = $('keySecret').value.trim();
+  if (!providerId || !secret) {
+    toast('Dán key vào trước đã');
+    return;
+  }
+
+  setBusy(true);
+  currentRun = engine.createRun();
+  try {
+    const result = await registry.addKeyToProvider({ providerId, secret });
+
+    if (result.reason === 'BLOCKED') {
+      log('key này đã bị xoá khỏi URL, không thêm lại');
+      toast('Key đã xoá trước đó — không thêm lại');
+      $('keyDialog').close();
+      return;
+    }
+    if (result.reason === 'DUPLICATE') {
+      toast('URL này đã có key này rồi');
+      $('keyDialog').close();
+      return;
+    }
+
+    // One key, every model: build the mappings rather than asking the user to
+    // attach it model by model.
+    const built = await engine.ensureMappings();
+    const models = (await registry.listModels(providerId)).length;
+
+    log(
+      `đã thêm key vào ${result.key.masked} · ${built} mapping ` +
+        `cho ${models} model của URL này`
+    );
+    toast(`Đã áp cho ${models} model`);
+    $('keyDialog').close();
+    $('keySecret').value = '';
+  } catch (error) {
+    log('lỗi thêm key: ' + (error?.message ?? error));
+    toast('Thêm key lỗi');
+  } finally {
+    setBusy(false);
+    currentRun = null;
+    await refresh();
+  }
+}
+
+async function openMapDialog(modelId) {
+  const providers = await registry.listProviders();
+  if (!providers.length) {
+    toast('Chưa có URL nào để gắn');
+    return;
+  }
+
+  mapSource = modelId;
+  $('mapHint').textContent = 'Gắn "' + modelId + '" vào URL bạn chọn.';
+  $('mapModel').value = modelId;
+
+  const select = $('mapProvider');
+  select.replaceChildren();
+  for (const provider of providers) {
+    const option = document.createElement('option');
+    option.value = provider.id;
+    option.textContent = provider.name + ' — ' + provider.baseURL;
+    select.append(option);
+  }
+
+  $('mapDialog').showModal();
+  $('mapModel').focus();
+}
+
+async function confirmManualMap() {
+  const modelId = $('mapModel').value.trim();
+  const providerId = $('mapProvider').value;
+  if (!modelId || !providerId) {
+    toast('Cần tên model và URL');
+    return;
+  }
+
+  setBusy(true);
+  currentRun = engine.createRun();
+  log('— gán thủ công: ' + modelId + ' —');
+  try {
+    const { model, created, probed } = await registry.attachModel({
+      providerId,
+      modelId,
+      probe: true,
+    });
+
+    // The item came out of the inbox; a manual attach settles it.
+    for (const item of await registry.listUnresolved()) {
+      if (item.detectedType === 'MODEL' && item.raw === modelId) {
+        await registry.removeUnresolved(item.id);
+      }
+    }
+
+    log(
+      `đã gắn ${model.modelId}${created ? ' (mới)' : ' (đã có)'}` +
+        (probed ? ` · ${probed} probe` : ' · chưa có key để probe')
+    );
+    toast(probed ? 'Đã gán và kiểm tra' : 'Đã gán');
+    $('mapDialog').close();
+  } catch (error) {
+    log('lỗi gán: ' + (error?.message ?? error));
+    toast('Gán lỗi');
+  } finally {
+    setBusy(false);
+    currentRun = null;
+    await refresh();
+  }
+}
+
+// ------------------------------------------------------ deleting a key (§4)
+// Deleting is remembered by fingerprint, so re-pasting the same secret cannot
+// quietly bring it back. Only the fingerprint is stored, never the secret.
+
+async function openDeleteDialog(key, provider) {
+  $('delHint').textContent =
+    provider.name + ' — ' + (key?.masked ?? provider.baseURL);
+
+  $('delSecret').value = key?.secret ?? '';
+  $('delSecret').placeholder = key?.secret
+    ? 'đã điền sẵn'
+    : 'dán lại key để khôi phục';
+  $('delSecretLabel').textContent = key
+    ? 'Key đã xoá (để khôi phục)'
+    : 'Key đã xoá khỏi URL này';
+
+  // Hide the delete button once there is nothing left to delete.
+  $('delConfirm').hidden = !key;
+  $('delRestore').hidden = Boolean(key);
+
+  $('delDialog').dataset.providerId = provider.id;
+  $('delDialog').dataset.keyId = key?.id ?? '';
+  $('delDialog').showModal();
+  $('delSecret').focus();
+}
+
+async function confirmDeleteKey() {
+  const providerId = $('delDialog').dataset.providerId;
+  const keyId = $('delDialog').dataset.keyId;
+  if (!providerId || !keyId) return;
+
+  const ok = await registry.removeKey(keyId);
+  log(ok ? 'đã xoá key' : 'không tìm thấy key để xoá');
+  toast(ok ? 'Đã xoá key' : 'Key không tồn tại');
+  $('delDialog').close();
+  await refresh();
+}
+
+async function confirmRestoreKey() {
+  const providerId = $('delDialog').dataset.providerId;
+  const secret = $('delSecret').value.trim();
+  if (!secret || !providerId) {
+    toast('Dán lại key để khôi phục');
+    return;
+  }
+
+  setBusy(true);
+  try {
+    const { key } = await registry.restoreKey(providerId, secret);
+    log('đã khôi phục key');
+    toast(key ? 'Đã khôi phục' : 'Không khôi phục được');
+    $('delDialog').close();
+  } catch (error) {
+    log('lỗi khôi phục: ' + (error?.message ?? error));
+    toast('Khôi phục lỗi');
+  } finally {
+    setBusy(false);
+    await refresh();
+  }
+}
+
 
 async function retryMapping(mapping, provider, key, model) {
   setBusy(true);
@@ -736,6 +1259,25 @@ $('btnRetry').addEventListener('click', () => testFiltered('failed'));
 $('btnTestHealthy').addEventListener('click', () => testFiltered(STATUS.HEALTHY));
 $('btnTestQuick').addEventListener('click', testQuick);
 $('btnSync').addEventListener('click', () => syncModels({ force: true }));
+for (const chip of document.querySelectorAll('.chip')) {
+  chip.addEventListener('click', () => {
+    applyFilter(chip.dataset.filter);
+    openDetail(chip.dataset.filter);
+  });
+}
+
+$('detailCopyAll').addEventListener('click', copyAllDetail);
+$('detailClose').addEventListener('click', () => $('detailDialog').close());
+
+// Manual map + key delete dialogs.
+$('keyCancel').addEventListener('click', () => $('keyDialog').close());
+$('keyConfirm').addEventListener('click', confirmAddKey);
+$('mapCancel').addEventListener('click', () => $('mapDialog').close());
+$('mapConfirm').addEventListener('click', confirmManualMap);
+$('delCancel').addEventListener('click', () => $('delDialog').close());
+$('delConfirm').addEventListener('click', confirmDeleteKey);
+$('delRestore').addEventListener('click', confirmRestoreKey);
+
 $('btnCancel').addEventListener('click', () => {
   currentRun?.cancel();
   startupRun?.cancel();
@@ -757,6 +1299,16 @@ if (location.protocol === 'file:') {
 // Render whatever is already stored, then refresh every provider's model
 // list in the background. Kept off the render path so a slow or failing
 // provider never delays the first paint.
+renderLegend();
+
+// Register the update worker. Pages serves with a 10 minute cache, so without
+// this a phone keeps the previous app until the cache expires. Registration
+// failure is never fatal: the app simply works with normal caching.
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
 refresh().then(() => log('sẵn sàng'));
 
 (async () => {

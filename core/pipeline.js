@@ -61,6 +61,9 @@ export async function importPaste({
     keys: [],
     mappings: [],
     unresolved: [],
+    // Keys the user previously deleted; reported rather than silently dropped
+    // so the paste never looks like it did nothing.
+    blockedKeys: [],
     errors: [],
     cancelled: false,
   };
@@ -159,10 +162,18 @@ export async function importPaste({
       continue;
     }
     for (const provider of providersByHint.values()) {
-      const { key, created } = await registry.upsertKey({
+      const { key, created, blocked } = await registry.upsertKey({
         providerId: provider.id,
         secret: keyItem.value,
       });
+
+      // Deleted by the user on this provider: keep the paste from putting it
+      // back, and say so instead of pretending the paste did nothing.
+      if (blocked) {
+        report.blockedKeys.push({ provider: provider.name });
+        continue;
+      }
+
       if (created) report.keys.push({ provider: provider.name, masked: key.masked });
       providersByHint.set(provider.id, provider);
       // remember key per provider for the mapping stage
@@ -289,12 +300,18 @@ export async function syncAllProviders({
   minAgeMs = 30 * 60 * 1000,
   probe = true,
 } = {}) {
+  // Evict keys the provider has declared dead before doing anything else.
+  // A key that keeps coming back expired just regenerates the same failing
+  // mappings on every sync, which is the repeat scanning this prevents.
+  const prunedKeys = probe ? await registry.pruneExpiredKeys() : 0;
+
   const providers = await registry.listProviders();
   const summary = {
     providers: 0,
     skipped: 0,
     modelsAdded: 0,
     failed: 0,
+    prunedKeys,
     cancelled: false,
   };
   if (!providers.length) return summary;

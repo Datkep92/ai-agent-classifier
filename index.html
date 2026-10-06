@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <title>Quản Lý API AI</title>
-<link rel="stylesheet" href="./styles.css" />
+<link rel="stylesheet" href="./styles.css?v=1de641f2" />
 </head>
 <body>
 <header class="app">
@@ -45,6 +45,26 @@ sk-..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="fa
     hãy mở ứng dụng qua máy chủ cục bộ thay vì mở trực tiếp tệp.
   </div>
 
+  <details class="legend">
+    <summary>Giải thích màu &amp; biể tữ</summary>
+    <div class="legend-body" id="legendRoot"></div>
+    <p class="legend-note">
+      Màu nó nói trạng thái của <b>mối cặp URL + model + key</b>, không phải cừa nhà cung cấp.
+      Cùng một màu để xanh có thể một dòng có model này chạy được.
+    </p>
+  </details>
+
+  <section class="filters">
+    <div class="filter-row">
+      <button class="chip on" data-filter="all">Tất cả</button>
+      <button class="chip" data-filter="healthy">Khỏe</button>
+      <button class="chip" data-filter="broken">Hỏng</button>
+      <button class="chip" data-filter="pending">Chờ</button>
+      <button class="chip" data-filter="unresolved">Chưa rõ</button>
+    </div>
+    <div class="filter-count" id="filterCount"></div>
+  </section>
+
   <section class="summary">
     <div class="stat ok"><div class="n" id="sHealthy">0</div><div class="l">Khỏe</div></div>
     <div class="stat warn"><div class="n" id="sCool">0</div><div class="l">Chờ</div></div>
@@ -75,9 +95,67 @@ sk-..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="fa
   <div class="actions"><button id="errClose" class="small">Đóng</button></div>
 </dialog>
 
+<dialog id="keyDialog">
+  <h3 style="margin:0 0 4px;font-size:15px;">Thên API key vào URL</h3>
+  <div class="hint" id="keyHint"></div>
+  <div class="warnbox" style="color:var(--muted);border-style:solid">
+    Key gắn vào <b>URL</b>, không gắn riêng từng model.
+    Mội model của URL này đều dùng được key này.
+  </div>
+  <label for="keySecret">API key</label>
+  <input id="keySecret" type="password" autocomplete="off" autocapitalize="off"
+         autocorrect="off" spellcheck="false" placeholder="dán key vào đây" />
+  <div class="actions">
+    <button id="keyConfirm" class="primary">Thêm + áp dụng cho mọi model</button>
+    <button id="keyCancel" class="small">Hủy</button>
+  </div>
+</dialog>
+
+<dialog id="mapDialog">
+  <h3 style="margin:0 0 4px;font-size:15px;">Gán model thụ công</h3>
+  <div class="hint" id="mapHint"></div>
+  <label for="mapModel">Tên model</label>
+  <input id="mapModel" type="text" autocomplete="off" autocapitalize="off"
+         autocorrect="off" spellcheck="false" placeholder="vd: fledge-alpha-free" />
+  <label for="mapProvider">Chỉn URL</label>
+  <select id="mapProvider"></select>
+  <div class="actions">
+    <button id="mapConfirm" class="primary">Gán + kiểm tra</button>
+    <button id="mapCancel" class="small">Hủy</button>
+  </div>
+</dialog>
+
+<dialog id="delDialog">
+  <h3 style="margin:0 0 4px;font-size:15px;">Xoá API key</h3>
+  <div class="hint" id="delHint"></div>
+  <div class="warnbox">
+    Key sẽ bị xoá khỏi storage. Nhưng cái này sẽ không tự động dán lại khi bạn dán nó vào.
+  </div>
+  <label for="delSecret" id="delSecretLabel">Hoặc dánh key đã xoá</label>
+  <input id="delSecret" type="text" autocomplete="off" autocapitalize="off"
+         autocorrect="off" spellcheck="false" placeholder="dán lại key để khới phục" />
+  <div class="actions">
+    <button id="delConfirm" class="danger">Xoá</button>
+    <button id="delRestore" class="small" hidden>Khôi phục</button>
+    <button id="delCancel" class="small">Hủy</button>
+  </div>
+</dialog>
+
+<dialog id="detailDialog">
+  <h3 style="margin:0 0 4px;font-size:15px;" id="detailTitle">Chi ti&#7871;t</h3>
+  <div class="hint" id="detailSub"></div>
+
+  <div class="rows" id="detailRows"></div>
+
+  <div class="actions">
+    <button id="detailCopyAll" class="small">Ch&#233;p t&#7845;t c&#7843;</button>
+    <button id="detailClose" class="small">Đóng</button>
+  </div>
+</dialog>
+
 <div class="toast" id="toast"></div>
 
 <input type="file" id="fileInput" accept="application/json" hidden />
-<script type="module" src="./app.js"></script>
+<script type="module" src="./app.js?v=1de641f2"></script>
 </body>
 </html>

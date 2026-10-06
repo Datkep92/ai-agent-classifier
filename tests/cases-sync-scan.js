@@ -139,9 +139,16 @@ export function registerSyncCases(mockFetch) {
         parked.candidates.length > 0,
         'records what was tried: ' + JSON.stringify(parked.candidates)
       );
+      // Either verdict is honest: NOT_AVAILABLE on the first sweep,
+      // ALREADY_REJECTED once the refusal has been remembered and the sweep no
+      // longer spends a request rediscovering it.
       assert(
-        parked.candidates.some((c) => c.result === 'NOT_AVAILABLE'),
+        parked.candidates.some((c) => ['NOT_AVAILABLE', 'ALREADY_REJECTED'].includes(c.result)),
         'and says the provider refused it: ' + JSON.stringify(parked.candidates)
+      );
+      assert(
+        await registry.isRememberedRejection('https://opencode.ai/zen/v1', 'totally-unknown-model'),
+        'the refusal is remembered so it is not retried'
       );
     });
 
